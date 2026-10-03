@@ -198,6 +198,9 @@ class MainActivity : AppCompatActivity() {
         val detector = GestureDetector(
             this,
             object : GestureDetector.SimpleOnGestureListener() {
+                // 必须返回 true，否则后续 onScroll 收不到（默认 false 直接吞手势）。
+                override fun onDown(e: MotionEvent): Boolean = true
+
                 override fun onScroll(
                     e1: MotionEvent?,
                     e2: MotionEvent,

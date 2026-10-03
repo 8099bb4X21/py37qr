@@ -9,8 +9,8 @@ QR 转换模块: 文字 -> 单码(短) 或 喷泉轮播流(长)。
 使用方法:
     stream = EncodedStream(text, error_name="M", block_len=200)
     stream.single          # True=单码, False=喷泉轮播
-    stream.frame_text(i)   # 第 i 帧的文本(单码=原文, 喷泉=PYQRF1 头帧)
-    stream.render_frames(box_size, border)  # 预渲染所有帧的 PIL 图列表
+    stream.frame_text(i)   # 第 i 帧文本(单码=原文, 喷泉=PYQRF1 头帧)
+    build_qr_image(...)    # 文本 -> PIL 图(调用方可按需逐帧渲染)
 """
 
 import os

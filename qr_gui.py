@@ -27,12 +27,14 @@ import qr_converter
 DEBUG = False
 CONFIG_FILE = "qr_config.ini"
 LOG_FILE = "qr_debug.log"
-DEBOUNCE_MS = 500
+DEBOUNCE_MS = 2000
 PREVIEW_SIZE = 460
 PREVIEW_BOX = 4
 PREVIEW_BORDER = 4
+FIXED_BORDER = 4
 DEFAULT_BLOCK_LEN = 200
-DEFAULT_INTERVAL_MS = 150
+DEFAULT_INTERVAL_MS = 100
+DEFAULT_BOX_SIZE = 10
 LEFT_WIDTH = 250
 
 
@@ -58,18 +60,37 @@ def find_config_path():
     return side
 
 
-def load_debug_flag():
-    path = find_config_path()
+def load_app_config():
+    # 读 ini 全量配置，每项独立 try，坏一项不影响其他项的默认值。
+    # 返回 (debug, interval_ms, box_size)。
+    debug = False
+    interval_ms = DEFAULT_INTERVAL_MS
+    box_size = DEFAULT_BOX_SIZE
     try:
         parser = configparser.ConfigParser()
-        parser.read(path, encoding="utf-8")
-        flag = parser.get("general", "debug", fallback="0").strip() == "1"
+        parser.read(find_config_path(), encoding="utf-8")
     except Exception:
-        flag = False
-    return flag
+        return debug, interval_ms, box_size
+    try:
+        debug = parser.get("general", "debug", fallback="0").strip() == "1"
+    except Exception:
+        pass
+    try:
+        interval_ms = int(parser.get("carousel", "interval_ms", fallback="100"))
+    except Exception:
+        pass
+    try:
+        box_size = int(parser.get("qr", "box_size", fallback="10"))
+    except Exception:
+        pass
+    if interval_ms < 50 or interval_ms > 2000:
+        interval_ms = DEFAULT_INTERVAL_MS
+    if box_size < 4 or box_size > 20:
+        box_size = DEFAULT_BOX_SIZE
+    return debug, interval_ms, box_size
 
 
-DEBUG = load_debug_flag()
+DEBUG, APP_INTERVAL_MS, APP_BOX_SIZE = load_app_config()
 
 
 def write_log(level, msg):
@@ -96,12 +117,12 @@ class QrApp:
         self.root.minsize(820, 600)
         self.debounce_id = None
         self.carousel_id = None
+        self.interval_debounce_id = None
         self.stream = None
         self.carousel_pos = 0
         self.error_var = tk.StringVar(value="M")
-        self.box_var = tk.IntVar(value=10)
-        self.border_var = tk.IntVar(value=4)
-        self.interval_var = tk.IntVar(value=DEFAULT_INTERVAL_MS)
+        self.box_var = tk.IntVar(value=APP_BOX_SIZE)
+        self.interval_var = tk.IntVar(value=APP_INTERVAL_MS)
         self.build_widgets()
         self.set_status("在左侧输入文字，二维码将自动生成", False)
 
@@ -142,17 +163,19 @@ class QrApp:
             ).grid(row=pos // 2, column=pos % 2, sticky="w")
         row = tk.Frame(param)
         row.pack(fill="x", pady=(8, 0))
-        tk.Label(row, text="尺寸").pack(side="left")
-        tk.Spinbox(row, from_=4, to=20, width=3, textvariable=self.box_var,
-                   command=self.schedule_auto_generate).pack(side="left", padx=(2, 6))
-        tk.Label(row, text="边框").pack(side="left")
-        tk.Spinbox(row, from_=1, to=10, width=3, textvariable=self.border_var,
-                   command=self.schedule_auto_generate).pack(side="left", padx=(2, 0))
+        tk.Label(row, text="分辨率").pack(side="left")
+        self.box_spin = tk.Spinbox(row, from_=4, to=20, width=3, textvariable=self.box_var,
+                   command=self.schedule_auto_generate)
+        self.box_spin.pack(side="left", padx=(2, 0))
+        # Spinbox 的 command 只响应上下箭头，键盘打字走 KeyRelease，都进 2 秒防抖。
+        self.box_spin.bind("<KeyRelease>", lambda event: self.schedule_auto_generate())
         row2 = tk.Frame(param)
         row2.pack(fill="x", pady=(8, 0))
         tk.Label(row2, text="轮播ms").pack(side="left")
-        tk.Spinbox(row2, from_=50, to=2000, width=5, textvariable=self.interval_var,
-                   command=self.restart_carousel).pack(side="left", padx=(2, 0))
+        self.interval_spin = tk.Spinbox(row2, from_=50, to=2000, width=5, textvariable=self.interval_var,
+                   command=self.schedule_interval_apply)
+        self.interval_spin.pack(side="left", padx=(2, 0))
+        self.interval_spin.bind("<KeyRelease>", lambda event: self.schedule_interval_apply())
 
         btn_row = tk.Frame(left)
         btn_row.pack(fill="x", pady=(10, 0))
@@ -175,17 +198,13 @@ class QrApp:
         self.status_label.configure(text=text, fg=("red" if is_error else "black"))
         write_log("error" if is_error else "info", text)
 
-    def get_box_border(self):
-        # 安全读尺寸/边框(保存用)，非法输入回退默认。
+    def get_box(self):
+        # 保存用分辨率；边框固定 4（规范静默区），不再可调。
         try:
             box = int(self.box_var.get())
         except Exception:
-            box = 10
-        try:
-            border = int(self.border_var.get())
-        except Exception:
-            border = 4
-        return max(4, min(box, 20)), max(1, min(border, 10))
+            box = APP_BOX_SIZE
+        return max(4, min(box, 20))
 
     def get_interval(self):
         try:
@@ -268,8 +287,22 @@ class QrApp:
                 pass
             self.carousel_id = None
 
+    def schedule_interval_apply(self):
+        # 轮播间隔改动后 2 秒无操作再生效，避免边输边重启轮播。
+        if self.interval_debounce_id is not None:
+            try:
+                self.root.after_cancel(self.interval_debounce_id)
+            except Exception:
+                pass
+        self.interval_debounce_id = self.root.after(DEBOUNCE_MS, self.apply_interval)
+
+    def apply_interval(self):
+        # 防抖到期真正应用轮播间隔（与 restart_carousel 分开，便于单测与复用）。
+        self.interval_debounce_id = None
+        self.restart_carousel()
+
     def restart_carousel(self):
-        # 轮播间隔改动时重启节奏。
+        # 按当前轮播间隔重启节奏（喷泉轮播中才有效）。
         if self.stream is not None and (not self.stream.single):
             self.stop_carousel()
             self.schedule_carousel()
@@ -298,14 +331,14 @@ class QrApp:
             filetypes=[("PNG 图片", "*.png")], initialfile="qrcode.png")
         if not target:
             return
-        box, border = self.get_box_border()
+        box = self.get_box()
         try:
             if self.stream.single:
                 images = [qr_converter.build_qr_image(
-                    self.stream.frame_text(0), box, border, self.stream.error_name)]
+                    self.stream.frame_text(0), box, FIXED_BORDER, self.stream.error_name)]
             else:
                 images = [qr_converter.build_qr_image(
-                    self.stream.frame_text(i), box, border, self.stream.error_name)
+                    self.stream.frame_text(i), box, FIXED_BORDER, self.stream.error_name)
                     for i in range(self.stream.k)]
             saved = qr_converter.save_qr_images(images, target)
         except Exception as exc:
@@ -344,7 +377,8 @@ def log_startup_info():
         + " python=" + sys.version.split()[0]
         + " segno=" + str(segno_ver) + " pillow=" + str(pil_ver)
         + " app_dir=" + APP_DIR + " config=" + find_config_path()
-        + " debug=" + str(DEBUG),
+        + " debug=" + str(DEBUG)
+        + " interval_ms=" + str(APP_INTERVAL_MS) + " box=" + str(APP_BOX_SIZE),
     )
 
 
