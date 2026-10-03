@@ -9,7 +9,7 @@ sed -i '/buster-updates/s/^/# /' /etc/apt/sources.list
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
-    python3 python3-pip python3-dev python3-tk \
+    python3 python3-pip python3-dev python3-tk binutils \
     2>&1 | tail -3
 
 python3 --version
