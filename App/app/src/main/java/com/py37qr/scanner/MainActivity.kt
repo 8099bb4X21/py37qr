@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Size
 import android.widget.Button
 import android.widget.TextView
@@ -51,9 +53,19 @@ class MainActivity : AppCompatActivity() {
     private var dialogShowing = false
     private val wechatReady = AtomicBoolean(false)
 
+    private val autoCaptureHandler = Handler(Looper.getMainLooper())
+    @Volatile private var scanMode = MODE_NORMAL
+    private var autoCaptureCount = 0
+
     // 本轮收集：序号 -> 正文；expectedTotal 为 null 表示还没进入多码会话。
     private val parts = LinkedHashMap<Int, String>()
     private var expectedTotal: Int? = null
+
+    companion object {
+        private const val MODE_NORMAL = 0
+        private const val MODE_MULTI = 1
+        private const val AUTO_CAPTURE_MAX = 20
+    }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -118,7 +130,7 @@ class MainActivity : AppCompatActivity() {
                         it.setAnalyzer(cameraExecutor, QrAnalyzer(::onQrs))
                     }
                 imageCapture = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .build()
                 provider.unbindAll()
                 provider.bindToLifecycle(
@@ -162,12 +174,62 @@ class MainActivity : AppCompatActivity() {
         if (parts.size >= total) {
             val full = (1..total).joinToString("") { parts[it] ?: "" }
             showResult(full, total)
+        } else if (scanMode == MODE_NORMAL) {
+            // 扫到带序号头的码但还没集齐：进入多码模式，
+            // 自动连拍补全剩余码，不用再手点按钮。
+            enterMultiMode()
         } else {
-            statusText.text = "已扫 " + parts.size + "/" + total + "，继续对准剩余码"
+            statusText.text = "已扫 " + parts.size + "/" + total + "，自动识别剩余中…"
         }
     }
 
+    private fun enterMultiMode() {
+        scanMode = MODE_MULTI
+        autoCaptureCount = 0
+        statusText.text = "已扫 " + parts.size + "/" + expectedTotal + "，自动识别中…"
+        // 先立即拍一张，之后靠 decodeFullFrame 尾部按需续拍。
+        scheduleAutoCapture(0)
+    }
+
+    private fun exitMultiMode(hint: String) {
+        scanMode = MODE_NORMAL
+        autoCaptureHandler.removeCallbacksAndMessages(null)
+        statusText.text = hint
+    }
+
+    private fun stopAutoCapture() {
+        autoCaptureHandler.removeCallbacksAndMessages(null)
+    }
+
+    private fun scheduleAutoCapture(delayMs: Long) {
+        // 用途：节流调度下一张，避免连拍过快吃满相机管线。
+        if (delayMs <= 0) {
+            autoCaptureHandler.post { runAutoCaptureStep() }
+        } else {
+            autoCaptureHandler.postDelayed({ runAutoCaptureStep() }, delayMs)
+        }
+    }
+
+    private fun runAutoCaptureStep() {
+        if (scanMode != MODE_MULTI || dialogShowing) {
+            return
+        }
+        autoCaptureCount++
+        if (autoCaptureCount > AUTO_CAPTURE_MAX) {
+            exitMultiMode("仍未扫齐，请靠近后重试或点“全屏识别”")
+            return
+        }
+        if (!wechatReady.get()) {
+            statusText.text = "识别引擎初始化中…"
+            scheduleAutoCapture(1000)
+            return
+        }
+        takePictureAndDecode()
+    }
+
     private fun showResult(text: String, total: Int) {
+        stopAutoCapture()
+        scanMode = MODE_NORMAL
         scanningEnabled = false
         dialogShowing = true
         val title = "成功识别 " + text.length + " 字（共 " + total + " 个码）"
@@ -188,6 +250,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun resetSession(hint: String) {
+        stopAutoCapture()
+        scanMode = MODE_NORMAL
         parts.clear()
         expectedTotal = null
         dialogShowing = false
@@ -211,12 +275,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun captureFullFrame() {
-        // 用途：“全屏识别”按钮入口，拍最高分辨率静帧走 ZXing 整图多解。
-        // 实时流分辨率有限，四码同屏时每个码像素不够，这是兜底的主力路径。
+        // 用途：“全屏识别”按钮入口，手动补拍一张（多码模式下也会自动连拍，按钮作兜底）。
+        statusText.setText(R.string.capture_working)
+        takePictureAndDecode()
+    }
+
+    private fun takePictureAndDecode() {
         if (!::imageCapture.isInitialized) {
             return
         }
-        statusText.setText(R.string.capture_working)
         imageCapture.takePicture(
             cameraExecutor,
             object : ImageCapture.OnImageCapturedCallback() {
@@ -235,11 +302,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun decodeFullFrame(image: ImageProxy) {
         // 用途：后台线程把整帧 JPEG 解成位图，微信引擎一次找出所有码，
-        // 逐个喂给现有归组拼合逻辑（与实时流同一入口，结果行为一致）。
+        // 逐个喂给归组拼合逻辑（与实时流同一入口，结果行为一致）。
         // 微信引擎自带 CNN 检测 + 小码超分，同屏多码、远小码都归它管。
         try {
             if (!wechatReady.get()) {
-                runOnUiThread { statusText.text = "微信引擎初始化中，稍后再拍" }
+                runOnUiThread { statusText.text = "识别引擎初始化中…" }
                 return
             }
             val buffer = image.planes[0].buffer
@@ -247,7 +314,7 @@ class MainActivity : AppCompatActivity() {
             buffer.get(bytes)
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             if (bitmap == null) {
-                runOnUiThread { statusText.setText(R.string.capture_none) }
+                runOnUiThread { onDecodeFinished(emptyList()) }
                 return
             }
             val results = try {
@@ -255,17 +322,25 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 emptyList<String>()
             }
-            runOnUiThread {
-                if (results.isEmpty()) {
-                    statusText.setText(R.string.capture_none)
-                } else {
-                    for (text in results) {
-                        handleValue(text)
-                    }
-                }
-            }
+            runOnUiThread { onDecodeFinished(results) }
         } finally {
             image.close()
+        }
+    }
+
+    private fun onDecodeFinished(results: List<String>) {
+        // 用途：解码结果落袋后，决定是否继续自动连拍。
+        if (results.isNotEmpty()) {
+            for (text in results) {
+                handleValue(text)
+            }
+        }
+        if (scanMode == MODE_MULTI && !dialogShowing) {
+            // 仍未集齐：稍等再拍下一张，形成“自动识别剩余码”的闭环。
+            statusText.text = "已扫 " + parts.size + "/" + expectedTotal + "，自动识别中…"
+            scheduleAutoCapture(800)
+        } else if (results.isEmpty() && scanMode == MODE_NORMAL && !dialogShowing) {
+            statusText.setText(R.string.capture_none)
         }
     }
 
@@ -275,6 +350,11 @@ class MainActivity : AppCompatActivity() {
 
         @ExperimentalGetImage
         override fun analyze(imageProxy: ImageProxy) {
+            // 多码模式靠微信引擎连拍补全，这里停 ML Kit 省电，也避免单码弹窗抢戏。
+            if (scanMode != MODE_NORMAL) {
+                imageProxy.close()
+                return
+            }
             val mediaImage = imageProxy.image
             if (mediaImage == null) {
                 imageProxy.close()
