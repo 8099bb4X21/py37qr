@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -30,6 +31,7 @@ import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.barcode.ZoomSuggestionOptions
 import com.google.mlkit.vision.common.InputImage
 import com.king.wechat.qrcode.WeChatQRCodeDetector
 import org.opencv.OpenCV
@@ -52,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private var scanningEnabled = true
     private var dialogShowing = false
     private val wechatReady = AtomicBoolean(false)
+    private var camera: Camera? = null
 
     private val autoCaptureHandler = Handler(Looper.getMainLooper())
     @Volatile private var scanMode = MODE_NORMAL
@@ -85,10 +88,21 @@ class MainActivity : AppCompatActivity() {
             captureFullFrame()
         }
 
-        // 只扫 QR；auto-zoom 在 GmsBarcodeScanner 整屏 API 上，
-        // 低阶 BarcodeScannerOptions 并没有该方法，不用它。
+        // ML Kit 只在低阶 BarcodeScanner 的 InputImage 路径下才触发 zoom 建议，
+        // 这里自己把建议倍率应用到 CameraX，实现“码太远自动拉近”。
+        val zoomSuggestion = ZoomSuggestionOptions.Builder { zoomRatio ->
+            val cam = camera
+            if (cam == null) {
+                false
+            } else {
+                val max = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
+                cam.cameraControl.setZoomRatio(zoomRatio.coerceIn(1f, max))
+                true
+            }
+        }.build()
         val options = BarcodeScannerOptions.Builder()
             .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .setZoomSuggestionOptions(zoomSuggestion)
             .build()
         scanner = BarcodeScanning.getClient(options)
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -133,7 +147,7 @@ class MainActivity : AppCompatActivity() {
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .build()
                 provider.unbindAll()
-                provider.bindToLifecycle(
+                camera = provider.bindToLifecycle(
                     this, CameraSelector.DEFAULT_BACK_CAMERA,
                     preview, analysis, imageCapture
                 )
@@ -227,9 +241,17 @@ class MainActivity : AppCompatActivity() {
         takePictureAndDecode()
     }
 
+    private fun resetZoom() {
+        try {
+            camera?.cameraControl?.setZoomRatio(1f)
+        } catch (e: Exception) {
+        }
+    }
+
     private fun showResult(text: String, total: Int) {
         stopAutoCapture()
         scanMode = MODE_NORMAL
+        resetZoom()
         scanningEnabled = false
         dialogShowing = true
         val title = "成功识别 " + text.length + " 字（共 " + total + " 个码）"
@@ -252,6 +274,7 @@ class MainActivity : AppCompatActivity() {
     private fun resetSession(hint: String) {
         stopAutoCapture()
         scanMode = MODE_NORMAL
+        resetZoom()
         parts.clear()
         expectedTotal = null
         dialogShowing = false
