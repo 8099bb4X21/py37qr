@@ -26,11 +26,23 @@ jobs:
           java-version: "17"
 
       # 不用 android-actions/setup-android：它会装已下架的 tools 包导致失败。
-      # ubuntu  runner 自带 Android SDK，这里只补装目标平台与构建工具。
+      # 直接用 runner 自带 SDK，只补装目标平台与构建工具。
       - name: Install Android packages
         run: |
-          yes | sdkmanager --licenses > /dev/null
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          for cand in "$ANDROID_HOME" "$ANDROID_SDK_ROOT" /usr/local/lib/android/sdk /opt/android-sdk; do
+            if [ -x "$cand/cmdline-tools/latest/bin/sdkmanager" ]; then
+              SDKMANAGER="$cand/cmdline-tools/latest/bin/sdkmanager"
+              echo "ANDROID_HOME=$cand" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          if [ -z "${SDKMANAGER:-}" ]; then
+            echo "sdkmanager not found"
+            ls /usr/local/lib/android/sdk 2>/dev/null || true
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
