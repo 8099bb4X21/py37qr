@@ -58,7 +58,8 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+          # 注意 keystore 路径是相对 app 模块目录解析的，所以解码到 app/ 下。
+          echo "$KEYSTORE_BASE64" | base64 -d > app/release.keystore
           {
             echo "KEYSTORE_FILE=release.keystore"
             echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
