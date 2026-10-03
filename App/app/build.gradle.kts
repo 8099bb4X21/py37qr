@@ -58,6 +58,9 @@ dependencies {
     // 17.3.0 起含 auto-zoom（远码自动提示变焦），见 MainActivity。
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
+    // ZXing：专解“一图多码”静帧（QRCodeMultiReader），纯 Java 无 Google 依赖。
+    implementation("com.google.zxing:core:3.5.4")
+
     val cameraxVersion = "1.3.4"
     implementation("androidx.camera:camera-core:$cameraxVersion")
     implementation("androidx.camera:camera-camera2:$cameraxVersion")

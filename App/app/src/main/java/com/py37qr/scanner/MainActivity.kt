@@ -5,7 +5,10 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.util.Size
+import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,6 +17,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -24,6 +29,11 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.RGBLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.multi.qrcode.QRCodeMultiReader
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -37,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var scanner: BarcodeScanner
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
+    private lateinit var imageCapture: ImageCapture
 
     private var scanningEnabled = true
     private var dialogShowing = false
@@ -59,6 +70,9 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         previewView = findViewById(R.id.previewView)
         statusText = findViewById(R.id.statusText)
+        findViewById<Button>(R.id.captureButton).setOnClickListener {
+            captureFullFrame()
+        }
 
         // 只扫 QR；auto-zoom 在 GmsBarcodeScanner 整屏 API 上，
         // 低阶 BarcodeScannerOptions 并没有该方法，不用它。
@@ -85,14 +99,20 @@ class MainActivity : AppCompatActivity() {
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
+                // 分析流提到 1280x720：码多同屏时每个码分到的像素才够解。
                 val analysis = ImageAnalysis.Builder()
+                    .setTargetResolution(Size(1280, 720))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build().also {
                         it.setAnalyzer(cameraExecutor, QrAnalyzer(::onQrs))
                     }
+                imageCapture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .build()
                 provider.unbindAll()
                 provider.bindToLifecycle(
-                    this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis
+                    this, CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview, analysis, imageCapture
                 )
             },
             ContextCompat.getMainExecutor(this)
@@ -140,9 +160,11 @@ class MainActivity : AppCompatActivity() {
         scanningEnabled = false
         dialogShowing = true
         val title = "成功识别 " + text.length + " 字（共 " + total + " 个码）"
+        // 弹框只给前 20 字预览，多了放不下；复制走的仍是全文。
+        val preview = if (text.length > 20) text.take(20) + "…" else text
         AlertDialog.Builder(this)
             .setTitle(title)
-            .setMessage(text)
+            .setMessage(preview)
             .setCancelable(false)
             .setPositiveButton(R.string.btn_copy) { _, _ ->
                 copyText(text)
@@ -175,6 +197,69 @@ class MainActivity : AppCompatActivity() {
             match.groupValues[2].toInt(),
             match.groupValues[3]
         )
+    }
+
+    private fun captureFullFrame() {
+        // 用途：“全屏识别”按钮入口，拍最高分辨率静帧走 ZXing 整图多解。
+        // 实时流分辨率有限，四码同屏时每个码像素不够，这是兜底的主力路径。
+        if (!::imageCapture.isInitialized) {
+            return
+        }
+        statusText.setText(R.string.capture_working)
+        imageCapture.takePicture(
+            cameraExecutor,
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    decodeFullFrame(image)
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    runOnUiThread {
+                        statusText.text = "拍照失败：" + exception.message
+                    }
+                }
+            }
+        )
+    }
+
+    private fun decodeFullFrame(image: ImageProxy) {
+        // 用途：后台线程把整帧 JPEG 解成位图，QRCodeMultiReader 一次找出所有码，
+        // 逐个喂给现有归组拼合逻辑（与实时流同一入口，结果行为一致）。
+        try {
+            val buffer = image.planes[0].buffer
+            val bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            if (bitmap == null) {
+                runOnUiThread { statusText.setText(R.string.capture_none) }
+                return
+            }
+            val width = bitmap.width
+            val height = bitmap.height
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+            val binary = BinaryBitmap(
+                HybridBinarizer(RGBLuminanceSource(width, height, pixels))
+            )
+            val hints = mapOf(DecodeHintType.TRY_HARDER to true)
+            val results = try {
+                QRCodeMultiReader().decodeMultiple(binary, hints)
+            } catch (e: Exception) {
+                emptyArray<com.google.zxing.Result>()
+            }
+            runOnUiThread {
+                if (results.isEmpty()) {
+                    statusText.setText(R.string.capture_none)
+                } else {
+                    for (result in results) {
+                        val text = result.text ?: continue
+                        handleValue(text)
+                    }
+                }
+            }
+        } finally {
+            image.close()
+        }
     }
 
     private inner class QrAnalyzer(

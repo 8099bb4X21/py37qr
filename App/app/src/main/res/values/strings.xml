@@ -6,4 +6,7 @@
     <string name="copied">已复制到剪贴板</string>
     <string name="btn_copy">复制内容</string>
     <string name="btn_continue">继续识别</string>
+    <string name="btn_capture">全屏识别</string>
+    <string name="capture_working">全屏识别中…</string>
+    <string name="capture_none">没认出，靠近些或逐个扫</string>
 </resources>
