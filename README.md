@@ -33,3 +33,14 @@ UOS 上出问题先开它复现一次，把日志贴回来定位。
 
 打 `v*` 标签或手动触发：`.github/workflows/build.yml`。
 产物：`qr_tool`（Debian10 ARM64 单文件，UOS20 可直接运行）。
+
+## 安卓 App（App/）
+
+扫码拼接：CameraX 预览 + ML Kit bundled 模型（离线可用），按 `PY37QR:序号/总数:` 头
+自动归组拼合，集齐弹结果（字数 + 全文），[复制内容]/[继续识别] 双按钮。
+云编译见 `.github/workflows/android.yml`，产物为 release APK。
+
+签名与《云编译/签名密钥配置说明.md》同一套（别名 mykey）：
+仓库 Secrets 备齐 `KEYSTORE_BASE64/KEYSTORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD` 四项即可出签名包；
+本地无密钥也能编过（产物为 unsigned 包，仅自测用）。
+密钥文件（`*.keystore`）已进 `.gitignore`，绝不提交。

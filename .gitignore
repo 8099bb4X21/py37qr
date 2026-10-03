@@ -9,3 +9,7 @@ test/out_*/
 qr_demo*.png
 .vscode/
 plan/
+# 签名密钥绝不进仓库，只放 GitHub Secrets
+*.keystore
+*.jks
+keystore.properties

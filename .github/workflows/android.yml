@@ -49,6 +49,23 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      # 与《云编译/签名密钥配置说明.md》同一套密钥：base64 解码出 keystore，
+      # 参数追加到 gradle.properties（仅 runner 本地，不进仓库）。
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+          {
+            echo "KEYSTORE_FILE=release.keystore"
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "KEY_ALIAS=$KEY_ALIAS"
+            echo "KEY_PASSWORD=$KEY_PASSWORD"
+          } >> gradle.properties
+
       - name: Assemble release APK
         run: gradle assembleRelease --no-daemon
 

@@ -15,9 +15,28 @@ android {
         versionName = "1.0"
     }
 
+    // 签名配置与《云编译/签名密钥配置说明.md》同一套密钥（别名 mykey）。
+    // 密钥本身只存在 GitHub Secrets，绝不进仓库；本地无密钥时跳过签名。
+    val keystoreFile = project.findProperty("KEYSTORE_FILE")?.toString()
+    signingConfigs {
+        create("release") {
+            if (keystoreFile != null) {
+                storeFile = file(keystoreFile)
+                storePassword = project.findProperty("KEYSTORE_PASSWORD")?.toString()
+                keyAlias = project.findProperty("KEY_ALIAS")?.toString()
+                keyPassword = project.findProperty("KEY_PASSWORD")?.toString()
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            // CI 在 gradle.properties 里注入 KEYSTORE_* 后才签名，
+            // 本地没有密钥时保持不签名也能编过（产物为 unsigned 包）。
+            if (keystoreFile != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
