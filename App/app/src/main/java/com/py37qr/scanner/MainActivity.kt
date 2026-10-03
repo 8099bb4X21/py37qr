@@ -60,9 +60,10 @@ class MainActivity : AppCompatActivity() {
         previewView = findViewById(R.id.previewView)
         statusText = findViewById(R.id.statusText)
 
+        // 只扫 QR；auto-zoom 在 GmsBarcodeScanner 整屏 API 上，
+        // 低阶 BarcodeScannerOptions 并没有该方法，不用它。
         val options = BarcodeScannerOptions.Builder()
             .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            .enableAutoZoom()
             .build()
         scanner = BarcodeScanning.getClient(options)
         cameraExecutor = Executors.newSingleThreadExecutor()
