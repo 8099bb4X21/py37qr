@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+dist/
+build/
+*.spec
+*.log
+test/out_*/
+qr_demo*.png
+.vscode/
+plan/

@@ -11,6 +11,18 @@ python3.7 qr_gui.py
 
 依赖只有两个：`segno`（纯 Python 编码，无编译依赖）+ `Pillow`（界面预览渲染）。
 
+## 配置文件
+
+`qr_config.ini` 与程序放同一目录（编译后放 exe 同目录），改完重启生效：
+
+```ini
+[general]
+debug = 0
+```
+
+`debug = 1` 时在同目录生成 `qr_debug.log`（启动环境、每次生成参数/耗时/错误堆栈），
+UOS 上出问题先开它复现一次，把日志贴回来定位。
+
 ## 云编译（UOS20 ARM64）
 
 参考 `KeymouseGo` / `docx-replace-tool` 的做法：`ubuntu-24.04-arm` 上起

@@ -9,11 +9,14 @@ QR 界面模块: 输入文字跟随自动生成 1 至 4 个二维码并预览保
 布局(工具面板型): 左侧固定参数面板，右侧弹性预览区。
 """
 
+import configparser
 import datetime
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
+import traceback
 
 from tkinter import filedialog
 from tkinter import messagebox
@@ -25,24 +28,55 @@ import qr_converter
 
 
 DEBUG = False
-LOG_FILE = "qr_gui.log"
+CONFIG_FILE = "qr_config.ini"
+LOG_FILE = "qr_debug.log"
 DEBOUNCE_MS = 600
 PREVIEW_SIZE = 320
 LEFT_WIDTH = 200
 
 
+def get_app_dir():
+    # 用途: 取程序所在目录，编译前后统一从该目录读写 ini 与 log。
+    # 源码运行就是本文件所在目录；pyinstaller 单文件打包后 __file__ 不可靠，
+    # 改用 exe 所在目录，保证 UOS 上和本机行为一致。
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+APP_DIR = get_app_dir()
+
+
+def load_debug_flag():
+    # 用途: 读同目录 ini 的 debug 开关，文件缺失或非法一律按关闭处理。
+    # 这样任何环境(缺 ini、只读目录)都能正常启动，不会因配置崩溃。
+    # 返回: True/False。
+    path = os.path.join(APP_DIR, CONFIG_FILE)
+    try:
+        parser = configparser.ConfigParser()
+        parser.read(path, encoding="utf-8")
+        return parser.get("general", "debug", fallback="0").strip() == "1"
+    except Exception:
+        return False
+
+
+DEBUG = load_debug_flag()
+
+
 def write_log(level, msg):
-    # 用途: 统一日志出口，带时间戳，DEBUG 关闭时只记 info 以上。
-    # 参数 level: debug/info/warn/error。
-    # 参数 msg: 日志正文。
+    # 用途: 统一日志出口，控制台永远打印，文件只在 ini 里 debug=1 时写。
+    # 文件固定落在 ini 同目录的 qr_debug.log，方便 UOS 上取证。
+    # 参数 level: debug/info/warn/error，debug 只在文件日志里出现。
+    # 参数 msg: 日志正文，可含多行(异常堆栈)。
     if level == "debug" and not DEBUG:
         return
     line = datetime.datetime.now().strftime("%H:%M:%S")
     line = "[" + level.upper() + "] " + line + " " + str(msg)
     print(line, flush=True)
+    if not DEBUG:
+        return
     try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(here, LOG_FILE)
+        path = os.path.join(APP_DIR, LOG_FILE)
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(line + "\n")
     except Exception:
@@ -284,14 +318,41 @@ class QrApp:
         # 参数 raw: 快照全文，避免生成过程中用户继续输入导致错位。
         # 参数 key: 本次参数快照，用于回填时核对。
         # 参数 seq: 本次任务序号，过时任务的结果由轮询侧丢弃。
+        import time
+
+        box_size, border, error_name = key[1], key[2], key[3]
+        try:
+            byte_len = len(raw.encode("utf-8"))
+        except Exception:
+            byte_len = -1
+        write_log(
+            "debug",
+            "任务开始 seq=" + str(seq) + " 字符=" + str(len(raw))
+            + " 字节=" + str(byte_len) + " box=" + str(box_size)
+            + " border=" + str(border) + " error=" + str(error_name),
+        )
+        begin = time.time()
         try:
             images = qr_converter.text_to_qr_images(
-                raw, key[1], key[2], key[3],
+                raw, box_size, border, error_name,
             )
             error = None
         except Exception as exc:
             images = []
             error = exc
+        spent = time.time() - begin
+        if error is None:
+            write_log(
+                "debug",
+                "任务成功 seq=" + str(seq) + " 数量=" + str(len(images))
+                + " 耗时=" + ("%.3fs" % spent),
+            )
+        else:
+            write_log(
+                "debug",
+                "任务失败 seq=" + str(seq) + " 耗时=" + ("%.3fs" % spent)
+                + " 异常=" + str(error) + "\n" + traceback.format_exc(),
+            )
         self.result_queue.put((seq, raw, images, error))
 
     def on_generate_done(self, seq, raw, images, error):
@@ -378,10 +439,38 @@ class QrApp:
         self.start_generate_thread()
 
 
+def log_startup_info():
+    # 用途: 启动时把环境快照记入 debug 日志，UOS 上出问题先看这几行。
+    # 包括是否 frozen、解释器版本、各依赖版本、配置与目录。
+    try:
+        import segno
+        import PIL
+
+        segno_ver = getattr(segno, "__version__", "未知")
+        pil_ver = getattr(PIL, "__version__", "未知")
+    except Exception as exc:
+        segno_ver = "导入失败: " + str(exc)
+        pil_ver = "导入失败: " + str(exc)
+    write_log(
+        "debug",
+        "启动 frozen=" + str(bool(getattr(sys, "frozen", False)))
+        + " python=" + sys.version.split()[0]
+        + " segno=" + str(segno_ver) + " pillow=" + str(pil_ver)
+        + " app_dir=" + APP_DIR + " debug=" + str(DEBUG),
+    )
+
+
 def main():
+    log_startup_info()
     root = tk.Tk()
     QrApp(root)
-    root.mainloop()
+    try:
+        root.mainloop()
+    except Exception:
+        # 主循环崩溃时把堆栈留进 debug 日志再抛，UOS 上双击运行时控制台一闪而过，
+        # 没有这个日志就什么都抓不到。
+        write_log("debug", "主循环异常退出\n" + traceback.format_exc())
+        raise
 
 
 if __name__ == "__main__":
