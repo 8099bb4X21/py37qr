@@ -23,6 +23,9 @@ debug = 0
 `debug = 1` 时在同目录生成 `qr_debug.log`（启动环境、每次生成参数/耗时/错误堆栈），
 UOS 上出问题先开它复现一次，把日志贴回来定位。
 
+云编译包里默认 ini 会以内嵌 + 外置（exe 同目录）两种形式存在，
+外置优先：把 `qr_config.ini` 放 exe 旁边改完重启即生效，不用重打包。
+
 ## 云编译（UOS20 ARM64）
 
 参考 `KeymouseGo` / `docx-replace-tool` 的做法：`ubuntu-24.04-arm` 上起

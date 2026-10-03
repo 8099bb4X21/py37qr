@@ -23,6 +23,11 @@ from tkinter import messagebox
 from typing import List
 
 from PIL import ImageTk
+import PIL._tkinter_finder  # noqa: F401
+# 上面这行不要删：pyinstaller -F 打包后 PIL.ImageTk 初始化 Tk 影像接口时
+# 需要它定位 Tcl/Tk，缺了就会报 No module named 'PIL._tkinter_finder'，
+# 进而整个预览贴图失败（已知坑，见项目规范）。
+# 源码运行时它无副作用，仅保证打包分析能收集到。
 
 import qr_converter
 
@@ -47,17 +52,35 @@ def get_app_dir():
 APP_DIR = get_app_dir()
 
 
+def find_config_path():
+    # 用途: 找 ini，exe 同目录优先，打包进包内的默认配置兜底。
+    # 为什么两级: pyinstaller --add-data 会把默认 ini 带进包(_MEIPASS)，
+    # 保证任何情况下都有配置可读；用户把 ini 放 exe 旁边即可覆盖默认值，
+    # 改完重启生效，不用重打包。
+    # 返回: 选用的 ini 路径（即使文件不存在也返回同目录路径，调用方按缺省处理）。
+    side = os.path.join(APP_DIR, CONFIG_FILE)
+    if os.path.isfile(side):
+        return side
+    if getattr(sys, "frozen", False):
+        inner = os.path.join(getattr(sys, "_MEIPASS", APP_DIR), CONFIG_FILE)
+        if os.path.isfile(inner):
+            return inner
+    return side
+
+
 def load_debug_flag():
-    # 用途: 读同目录 ini 的 debug 开关，文件缺失或非法一律按关闭处理。
+    # 用途: 读 ini 的 debug 开关，文件缺失或非法一律按关闭处理。
     # 这样任何环境(缺 ini、只读目录)都能正常启动，不会因配置崩溃。
     # 返回: True/False。
-    path = os.path.join(APP_DIR, CONFIG_FILE)
+    path = find_config_path()
     try:
         parser = configparser.ConfigParser()
         parser.read(path, encoding="utf-8")
-        return parser.get("general", "debug", fallback="0").strip() == "1"
+        flag = parser.get("general", "debug", fallback="0").strip() == "1"
     except Exception:
-        return False
+        flag = False
+    print("[INFO] 配置文件: " + path + " debug=" + str(flag), flush=True)
+    return flag
 
 
 DEBUG = load_debug_flag()
@@ -456,7 +479,8 @@ def log_startup_info():
         "启动 frozen=" + str(bool(getattr(sys, "frozen", False)))
         + " python=" + sys.version.split()[0]
         + " segno=" + str(segno_ver) + " pillow=" + str(pil_ver)
-        + " app_dir=" + APP_DIR + " debug=" + str(DEBUG),
+        + " app_dir=" + APP_DIR + " config=" + find_config_path()
+        + " debug=" + str(DEBUG),
     )
 
 

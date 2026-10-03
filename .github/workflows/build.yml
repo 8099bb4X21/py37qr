@@ -27,12 +27,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: py37qr-debian10-arm64
-          path: dist/qr_tool
+          path: |
+            dist/qr_tool
+            dist/qr_config.ini
           if-no-files-found: error
 
       - name: Create Release (on tag push only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/qr_tool
+          files: |
+            dist/qr_tool
+            dist/qr_config.ini
           generate_release_notes: true
