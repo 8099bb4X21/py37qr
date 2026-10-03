@@ -1,38 +1,53 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:orientation="vertical">
 
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorPrimary"
+        android:theme="@style/ThemeOverlay.Material3.Dark.ActionBar" />
 
-    <TextView
-        android:id="@+id/statusText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="#99000000"
-        android:padding="12dp"
-        android:text="@string/status_wait"
-        android:textColor="#FFFFFF"
-        android:textSize="15sp" />
-
-    <!-- 浮动竖条：往上拖拉近。SeekBar 转 270° 后 0 在下、100 在上。 -->
     <FrameLayout
-        android:layout_width="48dp"
-        android:layout_height="220dp"
-        android:layout_gravity="right|center_vertical"
-        android:layout_marginEnd="16dp">
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
-        <SeekBar
-            android:id="@+id/zoomBar"
-            android:layout_width="220dp"
-            android:layout_height="48dp"
-            android:layout_gravity="center"
-            android:rotation="270"
-            android:max="100"
-            android:progress="0" />
+        <androidx.camera.view.PreviewView
+            android:id="@+id/previewView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#99000000"
+            android:padding="12dp"
+            android:text="@string/status_wait"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp" />
+
+        <!-- 浮动竖条：往上拖拉近。SeekBar 转 270° 后 0 在下、100 在上。 -->
+        <FrameLayout
+            android:layout_width="48dp"
+            android:layout_height="220dp"
+            android:layout_gravity="right|center_vertical"
+            android:layout_marginEnd="16dp">
+
+            <SeekBar
+                android:id="@+id/zoomBar"
+                android:layout_width="220dp"
+                android:layout_height="48dp"
+                android:layout_gravity="center"
+                android:rotation="270"
+                android:max="100"
+                android:progress="0" />
+        </FrameLayout>
+
     </FrameLayout>
 
-</FrameLayout>
+</LinearLayout>

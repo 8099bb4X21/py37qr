@@ -6,4 +6,9 @@
     <string name="copied">已复制到剪贴板</string>
     <string name="btn_copy">复制内容</string>
     <string name="btn_continue">继续识别</string>
+    <string name="menu_history">历史记录</string>
+    <string name="menu_exit">退出</string>
+    <string name="history_title">历史记录（最近30次）</string>
+    <string name="history_empty">暂无记录</string>
+    <string name="btn_close">关闭</string>
 </resources>

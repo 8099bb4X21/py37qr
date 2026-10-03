@@ -60,6 +60,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
 
     // zxing-cpp 官方 Android wrapper：C++ 解码引擎，快、零 Google、离线可用，
     // 直接吃 CameraX ImageProxy，返回 .text/.bytes。decimen 同款引擎。

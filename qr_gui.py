@@ -317,7 +317,17 @@ class QrApp:
         return max(50, min(v, 2000))
 
     def on_text_change(self, event):
+        self.update_counts_fast()
         self.schedule_auto_generate()
+
+    def update_counts_fast(self):
+        # 每次按键立即刷新字符/字节数（纯计算不渲染不生成）；生成仍走 2 秒防抖。
+        raw = self.text_widget.get("1.0", "end-1c")
+        try:
+            used = len(raw.encode("utf-8"))
+        except Exception:
+            used = len(raw)
+        self.count_label.configure(text="字符: " + str(len(raw)) + " / 字节: " + str(used))
 
     def schedule_auto_generate(self):
         if self.debounce_id is not None:
