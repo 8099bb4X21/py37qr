@@ -18,8 +18,10 @@ B 机确认方式: python3 -c "import segno, PIL; print('ok')"
 """
 
 import os
+import re
 
 from typing import List
+from typing import Tuple
 
 import segno
 from segno import DataOverflowError
@@ -29,6 +31,13 @@ from PIL import ImageOps
 
 
 MAX_QR_COUNT = 4
+
+# 多码拼接协议头: PY37QR:i/N:正文，i 从 1 开始，N 为总数。
+# 单码默认无头(其他扫码软件看到的就是原文)；只有单码原文恰好撞上
+# 该格式时才加 1/1 头，避免手机端误判为多码缺件。
+# 手机端用同样规则解析归组排序拼合，见 parse_header。
+PROTOCOL_PREFIX = "PY37QR:"
+HEADER_RE = re.compile(r"^PY37QR:(\d+)/(\d+):([\s\S]*)$")
 
 # 4 码分片上限内单个码的字符数绝对上限(版本 40-L 纯字母数字模式约 4296)。
 # 超过这个数任何纠错等级都装不下，用于超长输入的快速失败，
@@ -131,6 +140,33 @@ def split_text_evenly(text, parts):
     return chunks
 
 
+def parse_header(text):
+    # 用途: 解析拼接协议头，手机端与自测用同一规则。
+    # 参数 text: 扫到的单码全文。
+    # 返回: (序号, 总数, 正文) 元组；无头返回 (1, 1, 原文)。
+    # 异常: 无，所有输入都可解析。
+    match = HEADER_RE.match(text)
+    if match is None:
+        return 1, 1, text
+    return int(match.group(1)), int(match.group(2)), match.group(3)
+
+
+def add_headers(chunks):
+    # 用途: 给切分后的每段加序号头，多码必加，单码仅在原文撞头时加 1/1。
+    # 参数 chunks: split_text_evenly 切出的段列表。
+    # 返回: List[str]，加头后的每段。
+    total = len(chunks)
+    if total <= 1:
+        single = chunks[0] if chunks else ""
+        if HEADER_RE.match(single) is not None:
+            return [PROTOCOL_PREFIX + "1/1:" + single]
+        return chunks
+    headed = []
+    for idx, chunk in enumerate(chunks, start=1):
+        headed.append(PROTOCOL_PREFIX + str(idx) + "/" + str(total) + ":" + chunk)
+    return headed
+
+
 def auto_split_text(text, error_name):
     # 用途: 自动决定拆成几个码(1-4)，尽量少拆，只编码不渲染。
     # 参数 text: 原始全文。
@@ -142,6 +178,8 @@ def auto_split_text(text, error_name):
     last_err = None
     for parts in range(1, MAX_QR_COUNT + 1):
         chunks = split_text_evenly(text, parts)
+        # 注意按加头后的内容试容量，头本身也占字节，边界处可能刚好装不下。
+        chunks = add_headers(chunks)
         ok = True
         for chunk in chunks:
             try:
@@ -187,6 +225,7 @@ def text_to_qr_images(text, box_size=10, border=4, error_name="M"):
     last_err = None
     for parts in range(1, MAX_QR_COUNT + 1):
         chunks = split_text_evenly(text, parts)
+        chunks = add_headers(chunks)
         codes = []
         ok = True
         for chunk in chunks:

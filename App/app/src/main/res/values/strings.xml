@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">扫码拼接</string>
+    <string name="status_wait">对准二维码自动识别</string>
+    <string name="need_camera">需要相机权限才能扫码</string>
+    <string name="copied">已复制到剪贴板</string>
+    <string name="btn_copy">复制内容</string>
+    <string name="btn_continue">继续识别</string>
+</resources>
