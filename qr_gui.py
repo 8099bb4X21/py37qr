@@ -3,7 +3,7 @@
 """
 QR 界面模块: 输入文字跟随自动生成 1 至 4 个二维码并预览保存。
 
-运行环境: Python3.7 + tkinter(标准库) + Pillow + qrcode。
+运行环境: Python3.7 + tkinter(标准库) + segno + Pillow。
 依赖 qr_converter.py(同目录)，启动: python3.7 qr_gui.py。
 
 布局(工具面板型): 左侧固定参数面板，右侧弹性预览区。
@@ -11,7 +11,7 @@ QR 界面模块: 输入文字跟随自动生成 1 至 4 个二维码并预览保
 
 import datetime
 import os
-import sys
+import queue
 import threading
 import tkinter as tk
 
@@ -59,6 +59,7 @@ class QrApp:
         self.after_id = None
         self.seq = 0
         self.last_key = None
+        self.result_queue = queue.Queue()
         self.photo_refs = []  # type: List[object]
         self.current_images = []  # type: List[object]
         self.error_var = tk.StringVar(value="M")
@@ -74,7 +75,10 @@ class QrApp:
         self.root.rowconfigure(0, weight=1)
         left = tk.Frame(self.root, width=LEFT_WIDTH, padx=8, pady=10)
         left.grid(row=0, column=0, sticky="nsw")
-        left.grid_propagate(False)
+        # 子控件全部是 pack 布局，必须用 pack_propagate(False) 锁宽。
+        # 之前误用 grid_propagate(False) 对 pack 子控件无效，
+        # 面板被默认 80 列的文本框撑到近 600px，width 参数形同虚设。
+        left.pack_propagate(False)
         right = tk.Frame(self.root, padx=10, pady=10)
         right.grid(row=0, column=1, sticky="nsew")
         right.columnconfigure(0, weight=1)
@@ -96,14 +100,17 @@ class QrApp:
         param = tk.LabelFrame(left, text="参数", padx=8, pady=8)
         param.pack(fill="x", pady=(8, 0))
         tk.Label(param, text="纠错等级(L<M<Q<H)").pack(anchor="w")
-        for level in ("L", "M", "Q", "H"):
+        # 左栏内容区只剩约 160px，4 个单选钮一排放不下，改 2x2 排列。
+        level_row = tk.Frame(param)
+        level_row.pack(fill="x")
+        for pos, level in enumerate(("L", "M", "Q", "H")):
             tk.Radiobutton(
-                param,
+                level_row,
                 text=level,
                 value=level,
                 variable=self.error_var,
                 command=self.schedule_auto_generate,
-            ).pack(side="left")
+            ).grid(row=pos // 2, column=pos % 2, sticky="w")
         row = tk.Frame(param)
         row.pack(fill="x", pady=(8, 0))
         tk.Label(row, text="尺寸").pack(side="left")
@@ -111,19 +118,19 @@ class QrApp:
             row,
             from_=4,
             to=20,
-            width=5,
+            width=3,
             textvariable=self.box_var,
             command=self.schedule_auto_generate,
-        ).pack(side="left", padx=(4, 12))
+        ).pack(side="left", padx=(2, 6))
         tk.Label(row, text="边框").pack(side="left")
         tk.Spinbox(
             row,
             from_=1,
             to=10,
-            width=5,
+            width=3,
             textvariable=self.border_var,
             command=self.schedule_auto_generate,
-        ).pack(side="left", padx=(4, 0))
+        ).pack(side="left", padx=(2, 0))
 
         btn_row = tk.Frame(left)
         btn_row.pack(fill="x", pady=(10, 0))
@@ -197,16 +204,33 @@ class QrApp:
                 pass
         self.after_id = self.root.after(DEBOUNCE_MS, self.start_generate_thread)
 
+    def get_box_border(self):
+        # 用途: 安全读取尺寸与边框，手工输入非法字符时回退默认值不崩溃。
+        # 返回: (box_size, border) 元组，均已钳到界面允许范围。
+        try:
+            box_size = int(self.box_var.get())
+        except Exception:
+            box_size = 10
+        try:
+            border = int(self.border_var.get())
+        except Exception:
+            border = 4
+        if box_size < 4 or box_size > 20:
+            box_size = 10
+        if border < 1 or border > 10:
+            border = 4
+        return box_size, border
+
     def start_generate_thread(self):
         # 用途: 防抖到期后在后台线程生成，主线程只刷新界面，避免输入卡顿。
-        # 为什么用线程: 大版本 QR 的版本适配要试 40 个版本再对 8 种掩模打分，
+        # 为什么用线程: 大版本 QR 编码需逐级试版本并做掩模寻优，
         # 单次几百毫秒到数秒，放在主线程会冻结输入，线程里算完再回主线程贴图。
         # 注意 PhotoImage 必须在主线程创建，工作线程只返回 PIL 图片。
         self.after_id = None
         raw = self.text_widget.get("1.0", "end-1c")
         self.refresh_count_label(raw)
-        key = (raw, int(self.box_var.get()), int(self.border_var.get()),
-               str(self.error_var.get()))
+        box_size, border = self.get_box_border()
+        key = (raw, box_size, border, str(self.error_var.get()))
         if key == self.last_key and self.current_images:
             self.set_status("内容无变化，已跳过重复生成", False)
             return
@@ -230,12 +254,36 @@ class QrApp:
             daemon=True,
         )
         worker.start()
+        # 工作线程绝不碰 tkinter(跨线程调 after 会抛
+        # RuntimeError: main thread is not in main loop)，
+        # 结果进队列，主线程每 100ms 轮询取回。
+        self.root.after(100, lambda: self.poll_worker(seq))
+
+    def poll_worker(self, seq):
+        # 用途: 主线程轮询取回后台结果，过时任务的结果直接丢弃。
+        # 参数 seq: 本次轮询对应的任务序号，已被新输入超前就停止轮询。
+        if seq != self.seq:
+            return
+        latest = None
+        while True:
+            try:
+                got = self.result_queue.get_nowait()
+            except queue.Empty:
+                break
+            if got[0] == self.seq:
+                latest = got
+            # 序号对不上的是过期任务结果，直接丢弃。
+        if latest is None:
+            self.root.after(100, lambda: self.poll_worker(seq))
+            return
+        _, raw, images, error = latest
+        self.on_generate_done(seq, raw, images, error)
 
     def generate_worker(self, raw, key, seq):
-        # 用途: 后台线程做重活，算完切回主线程更新界面。
+        # 用途: 后台线程做重活，结果放入队列即返回，不调用任何 tkinter 方法。
         # 参数 raw: 快照全文，避免生成过程中用户继续输入导致错位。
         # 参数 key: 本次参数快照，用于回填时核对。
-        # 参数 seq: 本次任务序号，过时任务的结果直接丢弃。
+        # 参数 seq: 本次任务序号，过时任务的结果由轮询侧丢弃。
         try:
             images = qr_converter.text_to_qr_images(
                 raw, key[1], key[2], key[3],
@@ -244,9 +292,7 @@ class QrApp:
         except Exception as exc:
             images = []
             error = exc
-        self.root.after(
-            0, lambda: self.on_generate_done(seq, raw, images, error),
-        )
+        self.result_queue.put((seq, raw, images, error))
 
     def on_generate_done(self, seq, raw, images, error):
         # 用途: 主线程回调，只接受最新任务的结果，旧任务直接丢弃。
@@ -272,8 +318,14 @@ class QrApp:
             self.set_status("已生成 1 个二维码", False)
 
     def do_generate(self):
-        # 用途: 手动按钮入口，与自动生成走同一后台线程路径。
-        self.schedule_auto_generate()
+        # 用途: 手动按钮入口，取消 pending 防抖后立即生成，不用再等 600ms。
+        if self.after_id is not None:
+            try:
+                self.root.after_cancel(self.after_id)
+            except Exception:
+                pass
+            self.after_id = None
+        self.start_generate_thread()
 
     def update_preview(self, images):
         # 用途: 把 1-4 张 PIL 图片缩略后放到 2x2 预览格。
