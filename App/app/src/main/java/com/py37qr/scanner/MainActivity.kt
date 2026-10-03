@@ -5,12 +5,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.util.Base64
 import android.util.Size
-import android.widget.Button
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,55 +19,36 @@ import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import com.google.mlkit.vision.barcode.BarcodeScanner
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.barcode.ZoomSuggestionOptions
-import com.google.mlkit.vision.common.InputImage
-import com.king.wechat.qrcode.WeChatQRCodeDetector
-import org.opencv.OpenCV
+import zxingcpp.BarcodeReader
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-// 与 PC 端 qr_converter.py 的拼接协议一致：PY37QR:序号/总数:正文。
-// 单码无头（即全文），多码按序号排序拼合。
-private val HEADER_REGEX = Regex("^PY37QR:(\\d+)/(\\d+):([\\s\\S]*)$")
+// 与 PC 端 fountain.py 协议一致：帧文本 "PYQRF1:sid:seq:k:blockLen:totalLen:fnv:base64"。
+private data class FrameHeader(
+    val sessionId: Int,
+    val seq: Long,
+    val k: Int,
+    val blockLen: Int,
+    val totalLen: Int,
+    val payloadFnv: Long,
+    val block: ByteArray,
+)
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var cameraExecutor: ExecutorService
-    private lateinit var scanner: BarcodeScanner
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
-    private lateinit var imageCapture: ImageCapture
-
-    private var scanningEnabled = true
-    private var dialogShowing = false
-    private val wechatReady = AtomicBoolean(false)
     private var camera: Camera? = null
 
-    private val autoCaptureHandler = Handler(Looper.getMainLooper())
-    @Volatile private var scanMode = MODE_NORMAL
-    private var autoCaptureCount = 0
-
-    // 本轮收集：序号 -> 正文；expectedTotal 为 null 表示还没进入多码会话。
-    private val parts = LinkedHashMap<Int, String>()
-    private var expectedTotal: Int? = null
-
-    companion object {
-        private const val MODE_NORMAL = 0
-        private const val MODE_MULTI = 1
-        private const val AUTO_CAPTURE_MAX = 20
-    }
+    private var decoder: FountainDecoder? = null
+    private val dialogShowing = AtomicBoolean(false)
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -84,40 +64,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         previewView = findViewById(R.id.previewView)
         statusText = findViewById(R.id.statusText)
-        findViewById<Button>(R.id.captureButton).setOnClickListener {
-            captureFullFrame()
-        }
-
-        // ML Kit 只在低阶 BarcodeScanner 的 InputImage 路径下才触发 zoom 建议，
-        // 这里自己把建议倍率应用到 CameraX，实现“码太远自动拉近”。
-        val zoomSuggestion = ZoomSuggestionOptions.Builder { zoomRatio ->
-            val cam = camera
-            if (cam == null) {
-                false
-            } else {
-                val max = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
-                cam.cameraControl.setZoomRatio(zoomRatio.coerceIn(1f, max))
-                true
-            }
-        }.build()
-        val options = BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            .setZoomSuggestionOptions(zoomSuggestion)
-            .build()
-        scanner = BarcodeScanning.getClient(options)
         cameraExecutor = Executors.newSingleThreadExecutor()
-
-        // 微信引擎初始化放后台：拷模型 + 加载 .so 要几秒，不能卡启动。
-        cameraExecutor.execute {
-            try {
-                if (OpenCV.initOpenCV()) {
-                    WeChatQRCodeDetector.init(this@MainActivity)
-                    wechatReady.set(true)
-                }
-            } catch (e: Exception) {
-                wechatReady.set(false)
-            }
-        }
+        setupZoomGesture()
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
@@ -136,126 +84,68 @@ class MainActivity : AppCompatActivity() {
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
-                // 分析流提到 1280x720：码多同屏时每个码分到的像素才够解。
                 val analysis = ImageAnalysis.Builder()
                     .setTargetResolution(Size(1280, 720))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build().also {
                         it.setAnalyzer(cameraExecutor, QrAnalyzer(::onQrs))
                     }
-                imageCapture = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    .build()
                 provider.unbindAll()
                 camera = provider.bindToLifecycle(
-                    this, CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview, analysis, imageCapture
+                    this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis
                 )
             },
             ContextCompat.getMainExecutor(this)
         )
     }
 
-    private fun onQrs(values: List<String>) {
-        // 分析线程回调，切回主线程再碰界面与会话状态。
+    private fun onQrs(texts: List<String>) {
         runOnUiThread {
-            for (value in values) {
-                handleValue(value)
+            for (text in texts) {
+                handleText(text)
             }
         }
     }
 
-    private fun handleValue(raw: String) {
-        if (!scanningEnabled || dialogShowing) {
+    private fun handleText(text: String) {
+        if (dialogShowing.get()) return
+        val frame = parseFrame(text)
+        if (frame == null) {
+            // 无头：普通单码，直接显示。
+            showResult(text, 1)
             return
         }
-        val parsed = parseHeader(raw)
-        if (parsed == null) {
-            // 无头即单码：直接弹结果。
-            showResult(raw, 1)
+        if (frame.k < 1 || frame.k > 4096 || frame.blockLen < 1 || frame.totalLen < 1) {
             return
         }
-        val (index, total, body) = parsed
-        if (total < 1 || total > 99 || index < 1 || index > total) {
-            return
+        val cur = decoder
+        if (cur == null || cur.sessionId != frame.sessionId ||
+            cur.k != frame.k || cur.blockLen != frame.blockLen ||
+            cur.totalLen != frame.totalLen
+        ) {
+            decoder = FountainDecoder(
+                frame.k, frame.blockLen, frame.sessionId, frame.totalLen, frame.payloadFnv
+            )
         }
-        if (expectedTotal != null && expectedTotal != total) {
-            // 混入另一组码：以新码为准重开一轮，避免两组内容拼串。
-            parts.clear()
-        }
-        expectedTotal = total
-        parts[index] = body
-        if (parts.size >= total) {
-            val full = (1..total).joinToString("") { parts[it] ?: "" }
-            showResult(full, total)
-        } else if (scanMode == MODE_NORMAL) {
-            // 扫到带序号头的码但还没集齐：进入多码模式，
-            // 自动连拍补全剩余码，不用再手点按钮。
-            enterMultiMode()
+        decoder?.addFrame(frame.seq, frame.block)
+        val d = decoder ?: return
+        if (d.isComplete) {
+            val bytes = d.assemble()
+            decoder = null
+            if (bytes != null) {
+                showResult(String(bytes, Charsets.UTF_8), d.k)
+            } else {
+                statusText.text = "校验失败，请重扫"
+            }
         } else {
-            statusText.text = "已扫 " + parts.size + "/" + total + "，自动识别剩余中…"
-        }
-    }
-
-    private fun enterMultiMode() {
-        scanMode = MODE_MULTI
-        autoCaptureCount = 0
-        statusText.text = "已扫 " + parts.size + "/" + expectedTotal + "，自动识别中…"
-        // 先立即拍一张，之后靠 decodeFullFrame 尾部按需续拍。
-        scheduleAutoCapture(0)
-    }
-
-    private fun exitMultiMode(hint: String) {
-        scanMode = MODE_NORMAL
-        autoCaptureHandler.removeCallbacksAndMessages(null)
-        statusText.text = hint
-    }
-
-    private fun stopAutoCapture() {
-        autoCaptureHandler.removeCallbacksAndMessages(null)
-    }
-
-    private fun scheduleAutoCapture(delayMs: Long) {
-        // 用途：节流调度下一张，避免连拍过快吃满相机管线。
-        if (delayMs <= 0) {
-            autoCaptureHandler.post { runAutoCaptureStep() }
-        } else {
-            autoCaptureHandler.postDelayed({ runAutoCaptureStep() }, delayMs)
-        }
-    }
-
-    private fun runAutoCaptureStep() {
-        if (scanMode != MODE_MULTI || dialogShowing) {
-            return
-        }
-        autoCaptureCount++
-        if (autoCaptureCount > AUTO_CAPTURE_MAX) {
-            exitMultiMode("仍未扫齐，请靠近后重试或点“全屏识别”")
-            return
-        }
-        if (!wechatReady.get()) {
-            statusText.text = "识别引擎初始化中…"
-            scheduleAutoCapture(1000)
-            return
-        }
-        takePictureAndDecode()
-    }
-
-    private fun resetZoom() {
-        try {
-            camera?.cameraControl?.setZoomRatio(1f)
-        } catch (e: Exception) {
+            statusText.text = "已收 " + d.solvedCount + "/" + d.k + " 块，继续对准屏幕"
         }
     }
 
     private fun showResult(text: String, total: Int) {
-        stopAutoCapture()
-        scanMode = MODE_NORMAL
-        resetZoom()
-        scanningEnabled = false
-        dialogShowing = true
-        val title = "成功识别 " + text.length + " 字（共 " + total + " 个码）"
-        // 弹框只给前 20 字预览，多了放不下；复制走的仍是全文。
+        if (dialogShowing.get()) return
+        dialogShowing.set(true)
+        val title = "成功识别 " + text.length + " 字（共 " + total + " 码）"
         val preview = if (text.length > 20) text.take(20) + "…" else text
         AlertDialog.Builder(this)
             .setTitle(title)
@@ -263,7 +153,7 @@ class MainActivity : AppCompatActivity() {
             .setCancelable(false)
             .setPositiveButton(R.string.btn_copy) { _, _ ->
                 copyText(text)
-                resetSession("已复制，继续对准下一个")
+                resetSession("已复制，继续扫描")
             }
             .setNegativeButton(R.string.btn_continue) { _, _ ->
                 resetSession("继续扫描")
@@ -272,13 +162,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun resetSession(hint: String) {
-        stopAutoCapture()
-        scanMode = MODE_NORMAL
-        resetZoom()
-        parts.clear()
-        expectedTotal = null
-        dialogShowing = false
-        scanningEnabled = true
+        decoder = null
+        dialogShowing.set(false)
         statusText.text = hint
     }
 
@@ -288,120 +173,77 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show()
     }
 
-    private fun parseHeader(raw: String): Triple<Int, Int, String>? {
-        val match = HEADER_REGEX.matchEntire(raw) ?: return null
-        return Triple(
-            match.groupValues[1].toInt(),
-            match.groupValues[2].toInt(),
-            match.groupValues[3]
-        )
-    }
-
-    private fun captureFullFrame() {
-        // 用途：“全屏识别”按钮入口，手动补拍一张（多码模式下也会自动连拍，按钮作兜底）。
-        statusText.setText(R.string.capture_working)
-        takePictureAndDecode()
-    }
-
-    private fun takePictureAndDecode() {
-        if (!::imageCapture.isInitialized) {
-            return
+    private fun parseFrame(text: String): FrameHeader? {
+        if (!text.startsWith("PYQRF1:")) return null
+        val parts = text.split(":")
+        if (parts.size != 8) return null
+        return try {
+            val block = Base64.decode(parts[7], Base64.NO_WRAP)
+            if (block.size.toInt() != parts[4].toInt()) return null
+            FrameHeader(
+                parts[1].toInt(16),
+                parts[2].toLong(),
+                parts[3].toInt(),
+                parts[4].toInt(),
+                parts[5].toInt(),
+                parts[6].toLong(16),
+                block,
+            )
+        } catch (e: Exception) {
+            null
         }
-        imageCapture.takePicture(
-            cameraExecutor,
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    decodeFullFrame(image)
+    }
+
+    private fun setupZoomGesture() {
+        val detector = GestureDetector(
+            this,
+            object : GestureDetector.SimpleOnGestureListener() {
+                override fun onScroll(
+                    e1: MotionEvent?,
+                    e2: MotionEvent?,
+                    distanceX: Float,
+                    distanceY: Float,
+                ): Boolean {
+                    // 上滑放大，下滑缩小。
+                    zoomBy(if (distanceY > 0) -1 else 1)
+                    return true
                 }
-
-                override fun onError(exception: ImageCaptureException) {
-                    runOnUiThread {
-                        statusText.text = "拍照失败：" + exception.message
-                    }
-                }
-            }
+            },
         )
+        previewView.setOnTouchListener { _, ev -> detector.onTouchEvent(ev) }
     }
 
-    private fun decodeFullFrame(image: ImageProxy) {
-        // 用途：后台线程把整帧 JPEG 解成位图，微信引擎一次找出所有码，
-        // 逐个喂给归组拼合逻辑（与实时流同一入口，结果行为一致）。
-        // 微信引擎自带 CNN 检测 + 小码超分，同屏多码、远小码都归它管。
-        try {
-            if (!wechatReady.get()) {
-                runOnUiThread { statusText.text = "识别引擎初始化中…" }
-                return
-            }
-            val buffer = image.planes[0].buffer
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            if (bitmap == null) {
-                runOnUiThread { onDecodeFinished(emptyList()) }
-                return
-            }
-            val results = try {
-                WeChatQRCodeDetector.detectAndDecode(bitmap)
-            } catch (e: Exception) {
-                emptyList<String>()
-            }
-            runOnUiThread { onDecodeFinished(results) }
-        } finally {
-            image.close()
-        }
-    }
-
-    private fun onDecodeFinished(results: List<String>) {
-        // 用途：解码结果落袋后，决定是否继续自动连拍。
-        if (results.isNotEmpty()) {
-            for (text in results) {
-                handleValue(text)
-            }
-        }
-        if (scanMode == MODE_MULTI && !dialogShowing) {
-            // 仍未集齐：稍等再拍下一张，形成“自动识别剩余码”的闭环。
-            statusText.text = "已扫 " + parts.size + "/" + expectedTotal + "，自动识别中…"
-            scheduleAutoCapture(800)
-        } else if (results.isEmpty() && scanMode == MODE_NORMAL && !dialogShowing) {
-            statusText.setText(R.string.capture_none)
-        }
+    private fun zoomBy(dir: Int) {
+        val cam = camera ?: return
+        val state = cam.cameraInfo.zoomState.value ?: return
+        val step = 0.2f
+        val target = (state.zoomRatio + dir * step)
+            .coerceIn(state.minZoomRatio, state.maxZoomRatio)
+        cam.cameraControl.setZoomRatio(target)
     }
 
     private inner class QrAnalyzer(
-        private val onResult: (List<String>) -> Unit
+        private val onResult: (List<String>) -> Unit,
     ) : ImageAnalysis.Analyzer {
+        private val reader = BarcodeReader()
 
         @ExperimentalGetImage
         override fun analyze(imageProxy: ImageProxy) {
-            // 多码模式靠微信引擎连拍补全，这里停 ML Kit 省电，也避免单码弹窗抢戏。
-            if (scanMode != MODE_NORMAL) {
-                imageProxy.close()
-                return
-            }
-            val mediaImage = imageProxy.image
-            if (mediaImage == null) {
-                imageProxy.close()
-                return
-            }
-            val input = InputImage.fromMediaImage(
-                mediaImage, imageProxy.imageInfo.rotationDegrees
-            )
-            scanner.process(input)
-                .addOnSuccessListener { barcodes ->
-                    val values = barcodes.mapNotNull { it.rawValue }
-                    if (values.isNotEmpty()) {
-                        onResult(values)
-                    }
+            val texts = imageProxy.use { proxy ->
+                try {
+                    reader.read(proxy).mapNotNull { it.text }
+                } catch (e: Exception) {
+                    emptyList()
                 }
-                .addOnCompleteListener {
-                    imageProxy.close()
-                }
+            }
+            if (texts.isNotEmpty()) {
+                onResult(texts)
+            }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
-        scanner.close()
     }
 }

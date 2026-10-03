@@ -34,6 +34,7 @@ pyinstaller --onefile \
     --hidden-import segno \
     --hidden-import PIL \
     --hidden-import PIL._tkinter_finder \
+    --hidden-import fountain \
     --add-data /workspace/qr_config.ini:. \
     --name qr_tool \
     /workspace/qr_gui.py
