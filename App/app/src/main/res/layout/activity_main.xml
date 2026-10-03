@@ -18,4 +18,21 @@
         android:textColor="#FFFFFF"
         android:textSize="15sp" />
 
+    <!-- 浮动竖条：往上拖拉近。SeekBar 转 270° 后 0 在下、100 在上。 -->
+    <FrameLayout
+        android:layout_width="48dp"
+        android:layout_height="220dp"
+        android:layout_gravity="right|center_vertical"
+        android:layout_marginEnd="16dp">
+
+        <SeekBar
+            android:id="@+id/zoomBar"
+            android:layout_width="220dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center"
+            android:rotation="270"
+            android:max="100"
+            android:progress="0" />
+    </FrameLayout>
+
 </FrameLayout>

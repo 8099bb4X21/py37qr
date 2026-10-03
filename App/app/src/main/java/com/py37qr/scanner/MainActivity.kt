@@ -8,8 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Base64
 import android.util.Size
-import android.view.GestureDetector
-import android.view.MotionEvent
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
+    private lateinit var zoomBar: SeekBar
     private var camera: Camera? = null
 
     private var decoder: FountainDecoder? = null
@@ -64,8 +64,19 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         previewView = findViewById(R.id.previewView)
         statusText = findViewById(R.id.statusText)
+        zoomBar = findViewById(R.id.zoomBar)
+        zoomBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    applySliderZoom(progress)
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
         cameraExecutor = Executors.newSingleThreadExecutor()
-        setupZoomGesture()
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
@@ -94,6 +105,8 @@ class MainActivity : AppCompatActivity() {
                 camera = provider.bindToLifecycle(
                     this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis
                 )
+                // 每次打开复位：变焦回到 1x，竖条位置由同一映射反推，不记忆上次。
+                resetZoomSlider()
             },
             ContextCompat.getMainExecutor(this)
         )
@@ -194,35 +207,32 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupZoomGesture() {
-        val detector = GestureDetector(
-            this,
-            object : GestureDetector.SimpleOnGestureListener() {
-                // 必须返回 true，否则后续 onScroll 收不到（默认 false 直接吞手势）。
-                override fun onDown(e: MotionEvent): Boolean = true
-
-                override fun onScroll(
-                    e1: MotionEvent?,
-                    e2: MotionEvent,
-                    distanceX: Float,
-                    distanceY: Float,
-                ): Boolean {
-                    // 上滑放大，下滑缩小。
-                    zoomBy(if (distanceY > 0) -1 else 1)
-                    return true
-                }
-            },
-        )
-        previewView.setOnTouchListener { _, ev -> detector.onTouchEvent(ev) }
+    private fun resetZoomSlider() {
+        // 复位唯一出口：先设 1x，再把滑条拨到 1x 对应的刻度。
+        // 这样 minZoomRatio 不是 1（如 0.6 广角）的机型也不会出现条位与实际脱节。
+        val cam = camera
+        if (cam == null) {
+            zoomBar.progress = 0
+            return
+        }
+        cam.cameraControl.setZoomRatio(1f)
+        val state = cam.cameraInfo.zoomState.value
+        if (state == null) {
+            zoomBar.progress = 0
+            return
+        }
+        val span = state.maxZoomRatio - state.minZoomRatio
+        val pos = if (span > 0f) (1f - state.minZoomRatio) / span * 100f else 0f
+        zoomBar.progress = pos.toInt().coerceIn(0, 100)
     }
 
-    private fun zoomBy(dir: Int) {
+    private fun applySliderZoom(progress: Int) {
+        // 浮动竖条：往上拖 progress 变大 -> 拉近。按相机实际最大倍率线性映射。
         val cam = camera ?: return
         val state = cam.cameraInfo.zoomState.value ?: return
-        val step = 0.2f
-        val target = (state.zoomRatio + dir * step)
-            .coerceIn(state.minZoomRatio, state.maxZoomRatio)
-        cam.cameraControl.setZoomRatio(target)
+        val ratio = state.minZoomRatio +
+            (progress / 100f) * (state.maxZoomRatio - state.minZoomRatio)
+        cam.cameraControl.setZoomRatio(ratio)
     }
 
     private inner class QrAnalyzer(

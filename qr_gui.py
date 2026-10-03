@@ -36,6 +36,8 @@ DEFAULT_BLOCK_LEN = 200
 DEFAULT_INTERVAL_MS = 100
 DEFAULT_BOX_SIZE = 10
 LEFT_WIDTH = 250
+WIN_MIN_W = 820
+WIN_MIN_H = 600
 
 
 def get_app_dir():
@@ -93,6 +95,105 @@ def load_app_config():
 DEBUG, APP_INTERVAL_MS, APP_BOX_SIZE = load_app_config()
 
 
+def ensure_config_defaults():
+    # ini 缺项自动回写（只补 general/carousel/qr；window 关闭时才有真实值）。
+    # 返回 True=写过文件。目录只读等异常静默跳过，保证任何环境可启动。
+    path = find_config_path()
+    parser = configparser.ConfigParser()
+    try:
+        if os.path.isfile(path):
+            parser.read(path, encoding="utf-8")
+    except Exception:
+        return False
+    defaults = {
+        "general": {"debug": "0"},
+        "carousel": {"interval_ms": "100"},
+        "qr": {"box_size": "10"},
+    }
+    changed = False
+    for section, keys in defaults.items():
+        if not parser.has_section(section):
+            parser.add_section(section)
+            changed = True
+        for key, value in keys.items():
+            if not parser.has_option(section, key):
+                parser.set(section, key, value)
+                changed = True
+    if not changed:
+        return False
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            parser.write(handle)
+        return True
+    except Exception:
+        return False
+
+
+ensure_config_defaults()
+
+
+def center_window(root):
+    # 无存档时居中（参考 docx 批量替换的 _center_window）。
+    root.update_idletasks()
+    width = root.winfo_width()
+    height = root.winfo_height()
+    x = (root.winfo_screenwidth() // 2) - (width // 2)
+    y = (root.winfo_screenheight() // 2) - (height // 2)
+    root.geometry("%dx%d+%d+%d" % (width, height, x, y))
+
+
+def apply_window_from_config(root):
+    # 打开时按 ini 摆窗口：齐了就用存档（钳制到可见范围），缺了/非法就居中。
+    # 参考 docx 批量替换的 _apply_saved_window_size。
+    # 返回 True=用了存档。
+    try:
+        parser = configparser.ConfigParser()
+        parser.read(find_config_path(), encoding="utf-8")
+        x = int(parser.get("window", "x"))
+        y = int(parser.get("window", "y"))
+        width = int(parser.get("window", "width"))
+        height = int(parser.get("window", "height"))
+    except Exception:
+        center_window(root)
+        return False
+    screen_w = root.winfo_screenwidth()
+    screen_h = root.winfo_screenheight()
+    width = max(WIN_MIN_W, min(width, screen_w - 40))
+    height = max(WIN_MIN_H, min(height, screen_h - 80))
+    x = max(0, min(x, screen_w - 100))
+    y = max(0, min(y, screen_h - 100))
+    root.geometry("%dx%d+%d+%d" % (width, height, x, y))
+    return True
+
+
+def save_window_to_config(root):
+    # 关闭时把当前窗口位置尺寸写回 ini，目录只读则静默跳过。
+    try:
+        root.update_idletasks()
+        x = root.winfo_x()
+        y = root.winfo_y()
+        width = max(WIN_MIN_W, root.winfo_width())
+        height = max(WIN_MIN_H, root.winfo_height())
+    except Exception:
+        return False
+    try:
+        path = find_config_path()
+        parser = configparser.ConfigParser()
+        if os.path.isfile(path):
+            parser.read(path, encoding="utf-8")
+        if not parser.has_section("window"):
+            parser.add_section("window")
+        parser.set("window", "x", str(x))
+        parser.set("window", "y", str(y))
+        parser.set("window", "width", str(width))
+        parser.set("window", "height", str(height))
+        with open(path, "w", encoding="utf-8") as handle:
+            parser.write(handle)
+        return True
+    except Exception:
+        return False
+
+
 def write_log(level, msg):
     # 控制台永远打印，文件只在 debug=1 时落 qr_debug.log。
     if level == "debug" and not DEBUG:
@@ -114,7 +215,8 @@ class QrApp:
     def __init__(self, root):
         self.root = root
         self.root.title("文字转二维码工具")
-        self.root.minsize(820, 600)
+        self.root.minsize(WIN_MIN_W, WIN_MIN_H)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.debounce_id = None
         self.carousel_id = None
         self.interval_debounce_id = None
@@ -124,6 +226,7 @@ class QrApp:
         self.box_var = tk.IntVar(value=APP_BOX_SIZE)
         self.interval_var = tk.IntVar(value=APP_INTERVAL_MS)
         self.build_widgets()
+        apply_window_from_config(self.root)
         self.set_status("在左侧输入文字，二维码将自动生成", False)
 
     def build_widgets(self):
@@ -347,6 +450,18 @@ class QrApp:
             return
         self.set_status("已保存 " + str(len(saved)) + " 张", False)
         messagebox.showinfo("保存成功", "\n".join(saved))
+
+    def on_close(self):
+        # 关闭：停掉定时器，把窗口位置尺寸写回 ini，再退出。
+        self.stop_carousel()
+        for timer_id in (self.debounce_id, self.interval_debounce_id):
+            if timer_id is not None:
+                try:
+                    self.root.after_cancel(timer_id)
+                except Exception:
+                    pass
+        save_window_to_config(self.root)
+        self.root.destroy()
 
     def on_clear(self):
         self.stop_carousel()
