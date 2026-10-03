@@ -29,13 +29,11 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import com.google.zxing.BinaryBitmap
-import com.google.zxing.DecodeHintType
-import com.google.zxing.RGBLuminanceSource
-import com.google.zxing.common.HybridBinarizer
-import com.google.zxing.multi.qrcode.QRCodeMultiReader
+import com.king.wechat.qrcode.WeChatQRCodeDetector
+import org.opencv.OpenCV
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 // 与 PC 端 qr_converter.py 的拼接协议一致：PY37QR:序号/总数:正文。
 // 单码无头（即全文），多码按序号排序拼合。
@@ -51,6 +49,7 @@ class MainActivity : AppCompatActivity() {
 
     private var scanningEnabled = true
     private var dialogShowing = false
+    private val wechatReady = AtomicBoolean(false)
 
     // 本轮收集：序号 -> 正文；expectedTotal 为 null 表示还没进入多码会话。
     private val parts = LinkedHashMap<Int, String>()
@@ -81,6 +80,18 @@ class MainActivity : AppCompatActivity() {
             .build()
         scanner = BarcodeScanning.getClient(options)
         cameraExecutor = Executors.newSingleThreadExecutor()
+
+        // 微信引擎初始化放后台：拷模型 + 加载 .so 要几秒，不能卡启动。
+        cameraExecutor.execute {
+            try {
+                if (OpenCV.initOpenCV()) {
+                    WeChatQRCodeDetector.init(this@MainActivity)
+                    wechatReady.set(true)
+                }
+            } catch (e: Exception) {
+                wechatReady.set(false)
+            }
+        }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
@@ -223,9 +234,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun decodeFullFrame(image: ImageProxy) {
-        // 用途：后台线程把整帧 JPEG 解成位图，QRCodeMultiReader 一次找出所有码，
+        // 用途：后台线程把整帧 JPEG 解成位图，微信引擎一次找出所有码，
         // 逐个喂给现有归组拼合逻辑（与实时流同一入口，结果行为一致）。
+        // 微信引擎自带 CNN 检测 + 小码超分，同屏多码、远小码都归它管。
         try {
+            if (!wechatReady.get()) {
+                runOnUiThread { statusText.text = "微信引擎初始化中，稍后再拍" }
+                return
+            }
             val buffer = image.planes[0].buffer
             val bytes = ByteArray(buffer.remaining())
             buffer.get(bytes)
@@ -234,25 +250,16 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { statusText.setText(R.string.capture_none) }
                 return
             }
-            val width = bitmap.width
-            val height = bitmap.height
-            val pixels = IntArray(width * height)
-            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-            val binary = BinaryBitmap(
-                HybridBinarizer(RGBLuminanceSource(width, height, pixels))
-            )
-            val hints = mapOf(DecodeHintType.TRY_HARDER to true)
             val results = try {
-                QRCodeMultiReader().decodeMultiple(binary, hints)
+                WeChatQRCodeDetector.detectAndDecode(bitmap)
             } catch (e: Exception) {
-                emptyArray<com.google.zxing.Result>()
+                emptyList<String>()
             }
             runOnUiThread {
                 if (results.isEmpty()) {
                     statusText.setText(R.string.capture_none)
                 } else {
-                    for (result in results) {
-                        val text = result.text ?: continue
+                    for (text in results) {
                         handleValue(text)
                     }
                 }
