@@ -36,7 +36,8 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
 
     // ML Kit bundled 模型：打包进 APK，完全离线可用，无需 Play 服务。
-    implementation("com.google.mlkit:barcode-scanning:17.2.0")
+    // 17.3.0 起含 auto-zoom（远码自动提示变焦），见 MainActivity。
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
     val cameraxVersion = "1.3.4"
     implementation("androidx.camera:camera-core:$cameraxVersion")
