@@ -8,7 +8,8 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - '20??????'
+      # 日期版 tag（如 20261004）。注意 `?` 通配在 tag 过滤里不生效（实测不触发），用 `*`。
+      - '20*'
 
 jobs:
   build:

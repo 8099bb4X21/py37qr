@@ -10,7 +10,8 @@ on:
     branches:
       - main
     tags:
-      - '20??????'
+      # 同 build.yml：`?` 在 tag 过滤里不生效，用 `*`。
+      - '20*'
     tags:
       - 'v*'
 
