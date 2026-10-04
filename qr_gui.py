@@ -509,7 +509,10 @@ def log_startup_info():
 
 def main():
     log_startup_info()
-    root = tk.Tk()
+    # className 决定窗口 WM_CLASS，launcher 用 StartupWMClass=Qrtool 做任务栏归组。
+    # 注意 Tk 会把类名归一化为首字母大写其余小写，实测 "QrTool" 会变成 "Qrtool"，
+    # 所以这里直接写归一化后的形式，保证与 .desktop 完全一致（大小写敏感）。
+    root = tk.Tk(className="Qrtool")
     QrApp(root)
     try:
         root.mainloop()

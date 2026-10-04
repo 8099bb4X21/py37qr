@@ -34,6 +34,19 @@ UOS 上出问题先开它复现一次，把日志贴回来定位。
 打 `v*` 标签或手动触发：`.github/workflows/build.yml`。
 产物：`qr_tool`（Debian10 ARM64 单文件，UOS20 可直接运行）。
 
+## UOS 桌面图标安装
+
+Linux 图标不嵌进二进制（PyInstaller `--icon` 仅 Windows/macOS 有效），
+靠 freedesktop `.desktop` 文件。产物里已带三件套，UOS 上执行：
+
+```bash
+bash install.sh
+```
+
+装到 `~/.local/bin` + 应用菜单，无需 root。窗口 `WM_CLASS=Qrtool` 与
+`qr_tool.desktop` 的 `StartupWMClass` 对应（注意 Tk 会把类名归一化为首字母大写其余小写，两处已对齐），任务栏可正确归组。
+（注：文件管理器里二进制本体仍显示通用可执行文件图标，这是 Linux 正常行为。）
+
 ## 安卓 App（App/）
 
 扫码拼接：CameraX 预览 + ML Kit bundled 模型（离线可用），按 `PY37QR:序号/总数:` 头

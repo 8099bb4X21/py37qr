@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=文字转二维码
+Comment=文字转二维码并轮播（离线小工具）
+Exec=__EXEC__ %F
+Icon=qr_tool
+Terminal=false
+Categories=Utility;Graphics;
+StartupWMClass=Qrtool
+StartupNotify=true

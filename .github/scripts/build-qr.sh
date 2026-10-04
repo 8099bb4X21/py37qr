@@ -42,6 +42,7 @@ pyinstaller --onefile \
 # 默认 ini 同时以内嵌(_MEIPASS 兜底)和外置(exe 同目录，可改)两种形式存在，
 # 外置优先，改完重启生效，不用重打包。
 cp /workspace/qr_config.ini /workspace/dist/qr_config.ini
+cp /workspace/assets/qr_tool.desktop /workspace/assets/qr_tool.svg /workspace/assets/install.sh /workspace/dist/
 
 echo "[OK] 构建完成!"
 ls -lh /workspace/dist/qr_tool /workspace/dist/qr_config.ini

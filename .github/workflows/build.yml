@@ -30,6 +30,9 @@ jobs:
           path: |
             dist/qr_tool
             dist/qr_config.ini
+            dist/qr_tool.desktop
+            dist/qr_tool.svg
+            dist/install.sh
           if-no-files-found: error
 
       - name: Create Release (on tag push only)
@@ -39,4 +42,7 @@ jobs:
           files: |
             dist/qr_tool
             dist/qr_config.ini
+            dist/qr_tool.desktop
+            dist/qr_tool.svg
+            dist/install.sh
           generate_release_notes: true
