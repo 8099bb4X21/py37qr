@@ -1,6 +1,7 @@
 package com.py37qr.scanner
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -104,8 +105,8 @@ class MainActivity : AppCompatActivity() {
                 camera = provider.bindToLifecycle(
                     this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis
                 )
-                // 每次打开复位：变焦回到 1x，竖条位置由同一映射反推，不记忆上次。
-                resetZoomSlider()
+                // 每次打开恢复上次退出时的变焦；无存档则按 1x 复位，不记忆就无从恢复。
+                restoreZoomState()
             },
             ContextCompat.getMainExecutor(this)
         )
@@ -224,22 +225,52 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun resetZoomSlider() {
-        // 复位唯一出口：先设 1x，再把滑条拨到 1x 对应的刻度。
-        // 这样 minZoomRatio 不是 1（如 0.6 广角）的机型也不会出现条位与实际脱节。
+    override fun onPause() {
+        super.onPause()
+        // 退出（进结果页/历史/后台）时存下当前变焦，下次打开恢复。
+        // 同步 commit，保证进程被杀时也已落盘；就一个 float，开销可忽略。
+        saveZoomState()
+    }
+
+    private fun loadSavedZoom(): Float {
+        return try {
+            getSharedPreferences("camera_state", Context.MODE_PRIVATE)
+                .getFloat("zoom_ratio", 1f)
+        } catch (e: Exception) {
+            1f
+        }
+    }
+
+    private fun saveZoomState() {
+        try {
+            val ratio = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: return
+            getSharedPreferences("camera_state", Context.MODE_PRIVATE)
+                .edit().putFloat("zoom_ratio", ratio).commit()
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun restoreZoomState() {
+        // 恢复唯一出口：先设值（超范围由 CameraX 钳制），再把滑条拨到对应刻度。
+        // 无存档时就是 1x，等价于原来的复位行为。
         val cam = camera
         if (cam == null) {
             zoomBar.progress = 0
             return
         }
-        cam.cameraControl.setZoomRatio(1f)
+        val saved = loadSavedZoom()
+        cam.cameraControl.setZoomRatio(saved)
         val state = cam.cameraInfo.zoomState.value
         if (state == null) {
             zoomBar.progress = 0
             return
         }
         val span = state.maxZoomRatio - state.minZoomRatio
-        val pos = if (span > 0f) (1f - state.minZoomRatio) / span * 100f else 0f
+        val pos = if (span > 0f) {
+            (saved.coerceIn(state.minZoomRatio, state.maxZoomRatio) - state.minZoomRatio) / span * 100f
+        } else {
+            0f
+        }
         zoomBar.progress = pos.toInt().coerceIn(0, 100)
     }
 

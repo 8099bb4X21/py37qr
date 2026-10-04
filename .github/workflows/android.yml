@@ -3,9 +3,10 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    paths:
-      - 'App/**'
-      - '.github/workflows/android.yml'
+    branches:
+      - main
+    tags:
+      - 'v*'
 
 jobs:
   build:
@@ -76,3 +77,10 @@ jobs:
           name: py37qr-android-apk
           path: App/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      - name: Create Release (on tag push only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: App/app/build/outputs/apk/release/*.apk
+          generate_release_notes: true
