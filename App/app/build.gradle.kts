@@ -60,7 +60,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
-    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    // Flexbox：不完整行也能水平居中（GridLayoutManager 做不到），方格向两边长。
+    implementation("com.google.android.flexbox:flexbox:3.0.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
 
     // zxing-cpp 官方 Android wrapper：C++ 解码引擎，快、零 Google、离线可用，

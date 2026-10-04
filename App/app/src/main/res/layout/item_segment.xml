@@ -1,40 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 方格项：外层定宽（列宽），内盒 1:1 正方形。 -->
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="match_parent"
+<!-- 浅色卡片：白底页上的灰蓝格，深色字。尺寸由 Adapter 按正方形算好填入。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/cellBox"
+    android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    android:padding="4dp">
+    android:layout_margin="4dp"
+    android:background="@drawable/cell_background"
+    android:foreground="?attr/selectableItemBackground"
+    android:orientation="vertical"
+    android:padding="10dp">
 
-    <LinearLayout
-        android:id="@+id/cellBox"
-        android:layout_width="0dp"
+    <TextView
+        android:id="@+id/cellPreview"
+        android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:background="?attr/selectableItemBackground"
-        android:orientation="vertical"
-        android:padding="10dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintDimensionRatio="1:1"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent">
+        android:layout_weight="1"
+        android:textColor="#0F172A"
+        android:textSize="14sp" />
 
-        <TextView
-            android:id="@+id/cellPreview"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:textColor="#FFFFFF"
-            android:textSize="14sp" />
+    <TextView
+        android:id="@+id/cellLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/label_pill"
+        android:paddingLeft="8dp"
+        android:paddingTop="2dp"
+        android:paddingRight="8dp"
+        android:paddingBottom="2dp"
+        android:textColor="#0369A1"
+        android:textSize="12sp" />
 
-        <TextView
-            android:id="@+id/cellLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:textColor="#BBBBBB"
-            android:textSize="12sp" />
-
-    </LinearLayout>
-
-</androidx.constraintlayout.widget.ConstraintLayout>
+</LinearLayout>
