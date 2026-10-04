@@ -1,5 +1,9 @@
 name: Build py37qr ARM64
 
+# 同上，发版需要写权限。
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
   push:

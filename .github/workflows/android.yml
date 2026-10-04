@@ -1,5 +1,9 @@
 name: Build Android APK
 
+# 发版要建 Release + 传附件，默认 token 可能只有读权限，这里显式要写权限。
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
   push:
