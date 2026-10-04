@@ -78,14 +78,15 @@ jobs:
 
       - name: Rename APK with date
         # 发版时用 tag 名（即日期版），平时用当天日期；文件名自动跟随日期。
+        # 注意本 job 默认工作目录是 App/，路径按此写（upload 步骤不受影响仍用仓库根相对路径）。
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
           else
             TAG="$(date +%Y%m%d)"
           fi
-          mv App/app/build/outputs/apk/release/app-release.apk "App/app/build/outputs/apk/release/QR_scanner_${TAG}.apk"
-          ls -lh App/app/build/outputs/apk/release/
+          mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/QR_scanner_${TAG}.apk"
+          ls -lh app/build/outputs/apk/release/
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
