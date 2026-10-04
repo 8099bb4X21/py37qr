@@ -68,7 +68,7 @@ jobs:
           } >> gradle.properties
 
       - name: Assemble release APK
-        run: gradle assembleRelease --no-daemon
+        run: gradle assembleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

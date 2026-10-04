@@ -97,38 +97,71 @@ def load_app_config():
 DEBUG, APP_INTERVAL_MS, APP_BOX_SIZE = load_app_config()
 
 
+def _ini_upsert(path, section, items, overwrite=False):
+    # 文本级增量更新 ini：只补/改指定节的键，原样保留注释、空行与其他内容。
+    # configparser 整文件重写会吃掉注释，所以这里手写追加逻辑。
+    # overwrite=False 时已存在的键绝不覆盖（只补缺项）；True 则更新旧值（存窗口用）。
+    # 返回 True=文件被改动过。
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except Exception:
+        lines = []
+    pending = dict(items)
+    in_target = False
+    section_seen = False
+    changed = False
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_target = stripped[1:-1].strip().lower() == section.lower()
+            if in_target:
+                section_seen = True
+            out.append(line)
+            continue
+        if in_target and stripped and not stripped.startswith((";", "#")) and "=" in line:
+            key = line.split("=", 1)[0].strip().lower()
+            hit = None
+            for want_key in pending.keys():
+                if key == want_key.lower():
+                    hit = want_key
+                    break
+            if hit is not None:
+                if overwrite:
+                    old_value = line.split("=", 1)[1].strip()
+                    if old_value != str(pending[hit]):
+                        out.append(hit + " = " + str(pending.pop(hit)))
+                        changed = True
+                        continue
+                # 值相同或只补缺项：保留原行，绝不覆盖用户内容。
+                del pending[hit]
+        out.append(line)
+    if not section_seen:
+        out.append("[" + section + "]")
+        changed = True
+    for want_key, value in pending.items():
+        out.append(want_key + " = " + str(value))
+        changed = True
+    if not changed:
+        return False
+    try:
+        with open(path, "w", encoding="utf-8", newline="") as handle:
+            handle.write("\n".join(out) + "\n")
+        return True
+    except Exception:
+        return False
+
+
 def ensure_config_defaults():
     # ini 缺项自动回写（只补 general/carousel/qr；window 关闭时才有真实值）。
     # 返回 True=写过文件。目录只读等异常静默跳过，保证任何环境可启动。
     path = find_config_path()
-    parser = configparser.ConfigParser()
-    try:
-        if os.path.isfile(path):
-            parser.read(path, encoding="utf-8")
-    except Exception:
-        return False
-    defaults = {
-        "general": {"debug": "0"},
-        "carousel": {"interval_ms": "100"},
-        "qr": {"box_size": "10"},
-    }
     changed = False
-    for section, keys in defaults.items():
-        if not parser.has_section(section):
-            parser.add_section(section)
-            changed = True
-        for key, value in keys.items():
-            if not parser.has_option(section, key):
-                parser.set(section, key, value)
-                changed = True
-    if not changed:
-        return False
-    try:
-        with open(path, "w", encoding="utf-8") as handle:
-            parser.write(handle)
-        return True
-    except Exception:
-        return False
+    changed = _ini_upsert(path, "general", {"debug": "0"}) or changed
+    changed = _ini_upsert(path, "carousel", {"interval_ms": "100"}) or changed
+    changed = _ini_upsert(path, "qr", {"box_size": "10"}) or changed
+    return changed
 
 
 ensure_config_defaults()
@@ -179,19 +212,12 @@ def save_window_to_config(root):
     except Exception:
         return False
     try:
-        path = find_config_path()
-        parser = configparser.ConfigParser()
-        if os.path.isfile(path):
-            parser.read(path, encoding="utf-8")
-        if not parser.has_section("window"):
-            parser.add_section("window")
-        parser.set("window", "x", str(x))
-        parser.set("window", "y", str(y))
-        parser.set("window", "width", str(width))
-        parser.set("window", "height", str(height))
-        with open(path, "w", encoding="utf-8") as handle:
-            parser.write(handle)
-        return True
+        return _ini_upsert(find_config_path(), "window", {
+            "x": str(x),
+            "y": str(y),
+            "width": str(width),
+            "height": str(height),
+        }, overwrite=True)
     except Exception:
         return False
 
@@ -389,7 +415,13 @@ class QrApp:
         if self.stream is None or self.stream.single:
             return
         self.carousel_pos = (self.carousel_pos + 1) % self.stream.frame_count()
-        self.show_frame(self.carousel_pos)
+        try:
+            self.show_frame(self.carousel_pos)
+        except Exception as exc:
+            # 单帧渲染失败不断轮播链，报错后继续下一帧。
+            self.set_status("渲染失败，已跳过该帧: " + str(exc), True)
+            self.schedule_carousel()
+            return
         self.frame_label.configure(
             text="帧 " + str(self.carousel_pos + 1) + "/" + str(self.stream.frame_count()))
         self.schedule_carousel()

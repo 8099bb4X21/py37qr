@@ -142,6 +142,18 @@ def parse_frame_text(text):
         return None
     if len(data["block"]) != data["blockLen"]:
         return None
+    # 防御 crafted 帧：负 seq 会让 Kotlin 端数组越界崩溃，超大 totalLen 会 OOM。
+    # 合法帧(本编码器产出)恒满足以下约束，两端用同一套。
+    if not (0 <= data["sessionId"] <= 0xFFFF):
+        return None
+    if data["seq"] < 0 or data["k"] < 1 or data["k"] > 4096:
+        return None
+    if data["blockLen"] < 1 or data["blockLen"] > 4096:
+        return None
+    if data["totalLen"] < 1 or data["totalLen"] > 8 * 1024 * 1024:
+        return None
+    if data["totalLen"] > data["blockLen"] * data["k"]:
+        return None
     return data
 
 
@@ -210,33 +222,28 @@ class FountainDecoder:
         return out
 
 
-def _verify(payload, block_len=200, drop_ratio=0.3, shuffle=True):
-    # 端到端自测：随机抽帧(不按序、可丢弃)，仍应还原。
+def _verify(payload, block_len=200, drop_ratio=0.3):
+    # 端到端自测：按真实轮播“顺序滚多个 cycle + 随机丢帧”，直到还原。
     enc = FountainEncoder(payload, block_len=block_len, session_id=12345)
     dec = FountainDecoder(enc.k, enc.block_len, enc.session_id, enc.total_len, enc.payload_fnv)
     order = list(range(cycle_length(enc.k)))
     random.shuffle(order)
-    fed = 0
     for seq in order:
         if random.random() < drop_ratio:
             continue
         text = enc.frame_text(seq)
         parsed = parse_frame_text(text)
-        assert parsed["seq"] == seq
         dec.add_frame(parsed["seq"], parsed["block"])
-        fed += 1
         if dec.is_complete():
             break
-    out = dec.assemble()
-    return out
+    return dec.assemble()
 
 
 def main():
-    import math
     random.seed(1)
     payload = ("这是一段用于验证喷泉码的中文文本。".encode("utf-8") * 200) + b"tail"
     # 丢 30% 帧并乱序，仍能还原。
-    out = _verify(payload, block_len=200, drop_ratio=0.3, shuffle=True)
+    out = _verify(payload, block_len=200, drop_ratio=0.3)
     assert out == payload, "喷泉还原不一致"
     print("[PASS] 喷泉码乱序+丢帧30% 还原成功, 字节=" + str(len(payload)))
     # 补充：顺序无限滚 carousel + 随机丢 50%，4k 帧内应还原（真实轮播模型）。

@@ -1,6 +1,7 @@
 # py37qr
 
-Python3.7 文字转二维码小工具：左侧输入文字（跟随自动生成），过长自动拆成 1 至 4 个二维码，右侧预览并保存为 PNG。
+文字转二维码小工具：左侧输入跟随生成，短文字单码静止，
+长文字喷泉码（fountain）切片后单张轮播，手机 App 抓够块数即还原。
 
 ## 本地运行
 
@@ -18,6 +19,12 @@ python3.7 qr_gui.py
 ```ini
 [general]
 debug = 0
+
+[carousel]
+interval_ms = 100
+
+[qr]
+box_size = 10
 ```
 
 `debug = 1` 时在同目录生成 `qr_debug.log`（启动环境、每次生成参数/耗时/错误堆栈），
@@ -49,9 +56,9 @@ bash install.sh
 
 ## 安卓 App（App/）
 
-扫码拼接：CameraX 预览 + ML Kit bundled 模型（离线可用），按 `PY37QR:序号/总数:` 头
-自动归组拼合，集齐弹结果（字数 + 全文），[复制内容]/[继续识别] 双按钮。
-云编译见 `.github/workflows/android.yml`，产物为 release APK。
+扫码拼接：CameraX 预览 + zxing-cpp 解码（C++，离线可用，无 Google 依赖），
+按 `PYQRF1:` 喷泉帧头去重消元，集齐即进方格结果页（4500 字一段，点格复制）。
+云编译见 `.github/workflows/android.yml`，产物为 release APK（versionCode 随构建号递增）。
 
 签名与《云编译/签名密钥配置说明.md》同一套（别名 mykey）：
 仓库 Secrets 备齐 `KEYSTORE_BASE64/KEYSTORE_PASSWORD/KEY_ALIAS/KEY_PASSWORD` 四项即可出签名包；

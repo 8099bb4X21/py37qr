@@ -11,7 +11,9 @@ android {
         applicationId = "com.py37qr.scanner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        // CI 传 -PVERSION_CODE=$run_number 保证每次构建递增，覆盖安装不报错；
+        // 本地默认 1。
+        versionCode = (project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 1)
         versionName = "1.0"
 
         ndk {

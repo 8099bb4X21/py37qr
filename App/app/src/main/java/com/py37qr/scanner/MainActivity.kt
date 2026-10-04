@@ -1,7 +1,6 @@
 package com.py37qr.scanner
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -11,9 +10,7 @@ import android.view.Menu
 import android.view.MenuItem
 import android.widget.SeekBar
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -50,9 +47,6 @@ class MainActivity : AppCompatActivity() {
     private var decoder: FountainDecoder? = null
     // 方格页打开期间不再收新结果；返回时 onResume 清掉。
     private var gridOpen = false
-    // 从历史进的方格：AlertDialog 点选会自动关闭列表页，
-    // 返回时靠这个标记重开历史列表，对齐“回历史记录”。
-    private var returnToHistory = false
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -175,11 +169,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 从方格页回来：清掉压住的守卫，继续扫；历史进的则重开历史列表。
+        // 只有从方格页回来才重设：首次启动 camera 还没 bind，守卫里会空过。
+        // 原因：部分机型在 pause/resume 后不保留变焦，代码里又没有任何路径设最大值，
+        // 与其猜机型行为，不如每次回来按滑条显式对齐一次，结果恒等于滑条。
+        val wasGrid = gridOpen
         gridOpen = false
-        if (returnToHistory) {
-            returnToHistory = false
-            showHistory()
+        if (wasGrid) {
+            applySliderZoom(zoomBar.progress)
         }
     }
 
@@ -191,7 +187,7 @@ class MainActivity : AppCompatActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_history -> {
-                showHistory()
+                startActivity(Intent(this, HistoryActivity::class.java))
                 true
             }
             R.id.action_exit -> {
@@ -203,62 +199,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveToHistory(text: String) {
-        // 最近 30 次，新在前。存坏了就静默跳过，不挡扫码主流程。
-        // 单条上限 60000 字：prefs 无硬限制但 XML 过大会卡顿，超了截断打标记。
-        val capped = if (text.length > 60000) text.take(60000) + "…（过长已截断）" else text
-        try {
-            val prefs = getSharedPreferences("scan_history", Context.MODE_PRIVATE)
-            val old = try {
-                org.json.JSONArray(prefs.getString("items", "[]"))
-            } catch (e: Exception) {
-                org.json.JSONArray()
-            }
-            val next = org.json.JSONArray()
-            next.put(org.json.JSONObject().put("t", capped).put("ts", System.currentTimeMillis()))
-            for (i in 0 until minOf(old.length(), 29)) {
-                next.put(old.get(i))
-            }
-            prefs.edit().putString("items", next.toString()).apply()
-        } catch (e: Exception) {
-        }
-    }
-
-    private fun loadHistory(): List<Pair<String, Long>> {
-        return try {
-            val prefs = getSharedPreferences("scan_history", Context.MODE_PRIVATE)
-            val arr = org.json.JSONArray(prefs.getString("items", "[]"))
-            val out = mutableListOf<Pair<String, Long>>()
-            for (i in 0 until minOf(arr.length(), 30)) {
-                val obj = arr.getJSONObject(i)
-                out.add(obj.getString("t") to obj.getLong("ts"))
-            }
-            out
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    private fun showHistory() {
-        val items = loadHistory()
-        if (items.isEmpty()) {
-            Toast.makeText(this, R.string.history_empty, Toast.LENGTH_SHORT).show()
-            return
-        }
-        val previews = items.map { (text, ts) ->
-            val date = java.text.SimpleDateFormat(
-                "MM-dd HH:mm", java.util.Locale.getDefault()
-            ).format(java.util.Date(ts))
-            val head = if (text.length > 20) text.take(20) + "…" else text
-            "$date · ${text.length}字 · $head"
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle(R.string.history_title)
-            .setItems(previews) { _, which ->
-                returnToHistory = true
-                openSegments(SegmentActivity.MODE_HISTORY, items[which].first)
-            }
-            .setNegativeButton(R.string.btn_close, null)
-            .show()
+        HistoryStore.save(this, text)
     }
 
     private fun parseFrame(text: String): FrameHeader? {
@@ -267,16 +208,20 @@ class MainActivity : AppCompatActivity() {
         if (parts.size != 8) return null
         return try {
             val block = Base64.decode(parts[7], Base64.NO_WRAP)
-            if (block.size.toInt() != parts[4].toInt()) return null
-            FrameHeader(
-                parts[1].toInt(16),
-                parts[2].toLong(),
-                parts[3].toInt(),
-                parts[4].toInt(),
-                parts[5].toInt(),
-                parts[6].toLong(16),
-                block,
-            )
+            val sessionId = parts[1].toInt(16)
+            val seq = parts[2].toLong()
+            val k = parts[3].toInt()
+            val blockLen = parts[4].toInt()
+            val totalLen = parts[5].toInt()
+            val fnv = parts[6].toLong(16)
+            // 防御 crafted 帧：负 seq 会让解码数组越界崩溃，
+            // 超大 totalLen 会在 assemble() 里 OOM；合法帧恒满足以下约束。
+            if (seq < 0 || k < 1 || k > 4096) return null
+            if (blockLen < 1 || blockLen > 4096) return null
+            if (totalLen < 1 || totalLen > 8 * 1024 * 1024) return null
+            if (totalLen > blockLen.toLong() * k) return null
+            if (block.size != blockLen) return null
+            FrameHeader(sessionId, seq, k, blockLen, totalLen, fnv, block)
         } catch (e: Exception) {
             null
         }
