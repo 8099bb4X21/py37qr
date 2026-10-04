@@ -38,16 +38,20 @@ UOS 上出问题先开它复现一次，把日志贴回来定位。
 参考 `KeymouseGo` / `docx-replace-tool` 的做法：`ubuntu-24.04-arm` 上起
 `arm64v8/debian:10-slim` 容器，Python3.7 + PyInstaller 打单文件。
 
-打 `v*` 标签或手动触发：`.github/workflows/build.yml`。
-产物：`qr_tool`（Debian10 ARM64 单文件，UOS20 可直接运行）。
+打日期标签（如 `20261004`）或手动触发：`.github/workflows/build.yml`。
+发版用日期版本号，`QR_tool_日期.zip` / `QR_scanner_日期.apk` 的日期自动跟随。
+产物：`QR_tool_日期.zip`（内含 qr_tool 单文件 + ini + desktop + svg，UOS20 可直接运行）。
 
 ## UOS 桌面图标安装
 
 Linux 图标不嵌进二进制（PyInstaller `--icon` 仅 Windows/macOS 有效），
-靠 freedesktop `.desktop` 文件。产物里已带三件套，UOS 上执行：
+靠 freedesktop `.desktop` 文件。把 zip 解压后，UOS 上手动安装：
 
 ```bash
-bash install.sh
+mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/scalable/apps
+cp qr_tool ~/.local/bin/ && chmod +x ~/.local/bin/qr_tool
+cp qr_tool.svg ~/.local/share/icons/hicolor/scalable/apps/
+sed "s|^Exec=.*|Exec=$HOME/.local/bin/qr_tool %F|" qr_tool.desktop > ~/.local/share/applications/qr_tool.desktop
 ```
 
 装到 `~/.local/bin` + 应用菜单，无需 root。窗口 `WM_CLASS=Qrtool` 与

@@ -42,7 +42,26 @@ pyinstaller --onefile \
 # 默认 ini 同时以内嵌(_MEIPASS 兜底)和外置(exe 同目录，可改)两种形式存在，
 # 外置优先，改完重启生效，不用重打包。
 cp /workspace/qr_config.ini /workspace/dist/qr_config.ini
-cp /workspace/assets/qr_tool.desktop /workspace/assets/qr_tool.svg /workspace/assets/install.sh /workspace/dist/
+cp /workspace/assets/qr_tool.desktop /workspace/assets/qr_tool.svg /workspace/dist/
+
+# UOS 端打成日期 zip 包：发版时 TAG_DATE 即 tag 名（YYYYMMDD），
+# 手动触发时取当天日期；非法值回退到当天日期。
+TAG_DATE="${TAG_DATE:-$(date +%Y%m%d)}"
+case "$TAG_DATE" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) TAG_DATE="$(date +%Y%m%d)" ;;
+esac
+python3 - "$TAG_DATE" <<'EOF'
+import sys
+import zipfile
+date = sys.argv[1]
+names = ["qr_tool", "qr_config.ini", "qr_tool.desktop", "qr_tool.svg"]
+out = "/workspace/dist/QR_tool_%s.zip" % date
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+    for name in names:
+        zf.write("/workspace/dist/" + name, name)
+print("[OK] zip done: " + out)
+EOF
 
 echo "[OK] 构建完成!"
-ls -lh /workspace/dist/qr_tool /workspace/dist/qr_config.ini
+ls -lh /workspace/dist/

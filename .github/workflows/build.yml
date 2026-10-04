@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - 'v*'
+      - '20??????'
 
 jobs:
   build:
@@ -20,8 +20,12 @@ jobs:
           fetch-depth: 1
 
       - name: Build inside ARM64 Debian 10 container
+        env:
+          # tag 触发时把 tag 名（即日期版）传进去打 zip 包名；手动触发则脚本内取当天日期。
+          TAG_DATE: ${{ github.ref_name }}
         run: |
           docker run --rm \
+            -e TAG_DATE \
             -v ${{ github.workspace }}:/workspace:Z \
             -w /workspace \
             arm64v8/debian:10-slim \
@@ -31,22 +35,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: py37qr-debian10-arm64
-          path: |
-            dist/qr_tool
-            dist/qr_config.ini
-            dist/qr_tool.desktop
-            dist/qr_tool.svg
-            dist/install.sh
+          path: dist/QR_tool_*.zip
           if-no-files-found: error
 
       - name: Create Release (on tag push only)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/20')
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            dist/qr_tool
-            dist/qr_config.ini
-            dist/qr_tool.desktop
-            dist/qr_tool.svg
-            dist/install.sh
+          files: dist/QR_tool_*.zip
           generate_release_notes: true

@@ -10,6 +10,8 @@ on:
     branches:
       - main
     tags:
+      - '20??????'
+    tags:
       - 'v*'
 
 jobs:
@@ -75,16 +77,27 @@ jobs:
       - name: Assemble release APK
         run: gradle assembleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }}
 
+      - name: Rename APK with date
+        # 发版时用 tag 名（即日期版），平时用当天日期；文件名自动跟随日期。
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="$(date +%Y%m%d)"
+          fi
+          mv App/app/build/outputs/apk/release/app-release.apk "App/app/build/outputs/apk/release/QR_scanner_${TAG}.apk"
+          ls -lh App/app/build/outputs/apk/release/
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: py37qr-android-apk
-          path: App/app/build/outputs/apk/release/*.apk
+          path: App/app/build/outputs/apk/release/QR_scanner_*.apk
           if-no-files-found: error
 
       - name: Create Release (on tag push only)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/20')
         uses: softprops/action-gh-release@v1
         with:
-          files: App/app/build/outputs/apk/release/*.apk
+          files: App/app/build/outputs/apk/release/QR_scanner_*.apk
           generate_release_notes: true
