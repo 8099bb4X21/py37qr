@@ -12,8 +12,6 @@ on:
     tags:
       # 同 build.yml：`?` 在 tag 过滤里不生效，用 `*`。
       - '20*'
-    tags:
-      - 'v*'
 
 jobs:
   build:
