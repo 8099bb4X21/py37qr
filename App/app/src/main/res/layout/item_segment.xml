@@ -16,7 +16,7 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:textColor="#0F172A"
-        android:textSize="14sp" />
+        android:textSize="12sp" />
 
     <TextView
         android:id="@+id/cellLabel"
@@ -29,6 +29,6 @@
         android:paddingRight="8dp"
         android:paddingBottom="2dp"
         android:textColor="#0369A1"
-        android:textSize="12sp" />
+        android:textSize="10sp" />
 
 </LinearLayout>
