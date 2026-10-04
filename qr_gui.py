@@ -18,6 +18,8 @@ import traceback
 from tkinter import filedialog
 from tkinter import messagebox
 
+from PIL import Image
+from PIL import ImageDraw
 from PIL import ImageTk
 import PIL._tkinter_finder  # noqa: F401  # 打包后 ImageTk 定位 Tcl/Tk 必需
 
@@ -485,6 +487,53 @@ class QrApp:
         self.do_generate()
 
 
+def make_window_icon(size=48):
+    # PIL 现场画任务栏图标：照着 assets/qr_tool.svg 简化（圆角深底+青色取景框+
+    # 白色定位块+扫描线），渐变/辉光/虚线网格在 48px 下不可见故省略。
+    # 不带外部资源，frozen 包直接可用；返回 RGBA 图。
+    scale = size / 108.0
+
+    def s(v):
+        return int(round(v * scale))
+
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([0, 0, size - 1, size - 1], radius=s(24), fill=(15, 23, 42, 255))
+    cyan = (0, 242, 254, 255)
+    white = (255, 255, 255, 255)
+    light = (226, 232, 240, 255)
+    w = max(1, s(3))
+    # 四角取景框
+    draw.line([s(27), s(37), s(27), s(27), s(37), s(27)], fill=cyan, width=w, joint="curve")
+    draw.line([s(71), s(27), s(79), s(27), s(81), s(29), s(81), s(37)], fill=cyan, width=w, joint="curve")
+    draw.line([s(27), s(71), s(27), s(79), s(29), s(81), s(37), s(81)], fill=cyan, width=w, joint="curve")
+    draw.line([s(71), s(81), s(79), s(81), s(81), s(79), s(81), s(71)], fill=cyan, width=w, joint="curve")
+    # 三个定位块：白外框+深底掏空+白中心
+    for fx, fy in ((32, 32), (64, 32), (32, 64)):
+        draw.rectangle([s(fx), s(fy), s(fx + 12), s(fy + 12)], fill=white)
+        draw.rectangle([s(fx + 2), s(fy + 2), s(fx + 10), s(fy + 10)], fill=(15, 23, 42, 255))
+        draw.rectangle([s(fx + 5), s(fy + 5), s(fx + 7), s(fy + 7)], fill=white)
+    # 数据点阵抽几个
+    for mx, my in ((64, 64), (72, 64), (64, 72), (50, 32), (32, 50), (56, 56)):
+        draw.rectangle([s(mx), s(my), s(mx + 4), s(my + 4)], fill=light)
+    draw.rectangle([s(48), s(48), s(48 + 5), s(48 + 5)], fill=cyan)
+    # 扫描线
+    draw.line([s(25), s(54), s(83), s(54)], fill=cyan, width=max(1, s(2)))
+    return img
+
+
+def set_window_icon(root):
+    # 任务栏图标：Tk 的 iconphoto 会写 X11 _NET_WM_ICON，这正是 KeymouseGo
+    # （Qt setWindowIcon）能显示而我们之前不能的原因；.desktop 只管启动器菜单。
+    # 失败静默（退回当前无图标状态，不影响运行）。
+    try:
+        photo = ImageTk.PhotoImage(make_window_icon())
+        root.iconphoto(True, photo)
+        root.icon_image_ref = photo
+    except Exception as exc:
+        write_log("debug", "窗口图标设置失败（不影响运行）: " + str(exc))
+
+
 def log_startup_info():
     # 启动环境快照落入 debug 日志。
     try:
@@ -513,6 +562,7 @@ def main():
     # 注意 Tk 会把类名归一化为首字母大写其余小写，实测 "QrTool" 会变成 "Qrtool"，
     # 所以这里直接写归一化后的形式，保证与 .desktop 完全一致（大小写敏感）。
     root = tk.Tk(className="Qrtool")
+    set_window_icon(root)
     QrApp(root)
     try:
         root.mainloop()
