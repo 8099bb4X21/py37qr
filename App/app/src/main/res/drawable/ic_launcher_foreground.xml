@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 由 E:\OpenCode\Python37\1.svg 转写。取舍说明：去掉了 glow 滤镜
+    （VectorDrawable 不支持 feGaussianBlur）和 0.3 透明的虚线网格
+    （图标尺寸下不可见还添乱）；圆角矩形的 rx 抹平成直角；
+    group opacity 折进 fillAlpha；渐变 stop-opacity 折进颜色 Alpha。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 四角取景框 -->
+    <path
+        android:pathData="M27,37 V29 A2,2 0 0 1 29,27 H37"
+        android:strokeWidth="3"
+        android:strokeColor="#FF00F2FE"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M71,27 H79 A2,2 0 0 1 81,29 V37"
+        android:strokeWidth="3"
+        android:strokeColor="#FF00F2FE"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M27,71 V79 A2,2 0 0 0 29,81 H37"
+        android:strokeWidth="3"
+        android:strokeColor="#FF00F2FE"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M71,81 H79 A2,2 0 0 0 81,79 V71"
+        android:strokeWidth="3"
+        android:strokeColor="#FF00F2FE"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- 三个定位方块 -->
+    <path
+        android:fillType="evenOdd"
+        android:pathData="M32,32 h12 v12 h-12 z M34,34 v8 h8 v-8 z M37,37 h2 v2 h-2 z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:fillType="evenOdd"
+        android:pathData="M64,32 h12 v12 h-12 z M66,34 v8 h8 v-8 z M69,37 h2 v2 h-2 z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:fillType="evenOdd"
+        android:pathData="M32,64 h12 v12 h-12 z M34,66 v8 h8 v-8 z M37,69 h2 v2 h-2 z"
+        android:fillColor="#FFFFFFFF" />
+
+    <!-- 数据点阵 -->
+    <path
+        android:pathData="M64,64 h4 v4 h-4 z M72,64 h4 v4 h-4 z M64,72 h4 v4 h-4 z M68,68 h4 v4 h-4 z M72,72 h4 v4 h-4 z M50,32 h4 v4 h-4 z M56,36 h4 v4 h-4 z M32,50 h4 v4 h-4 z M36,56 h4 v4 h-4 z M56,48 h4 v4 h-4 z M48,56 h4 v4 h-4 z M56,56 h4 v4 h-4 z M64,50 h4 v4 h-4 z M50,64 h4 v4 h-4 z"
+        android:fillColor="#FFE2E8F0"
+        android:fillAlpha="0.9" />
+    <path
+        android:pathData="M48,48 h5 v5 h-5 z"
+        android:fillColor="#FF00F2FE" />
+
+    <!-- 扫描光带 -->
+    <path
+        android:pathData="M26,38 L82,38 L82,54 L26,54 z"
+        android:fillAlpha="0.6">
+        <gradient
+            android:type="linear"
+            android:startX="0"
+            android:startY="0"
+            android:endX="0"
+            android:endY="108">
+            <item android:offset="0" android:color="#5900F2FE" />
+            <item android:offset="1" android:color="#0000F2FE" />
+        </gradient>
+    </path>
+    <!-- 扫描线：描边不支持渐变，改成 2px 高的填充细条，渐变照用 -->
+    <path
+        android:pathData="M25,53 L83,53 L83,55 L25,55 z">
+        <gradient
+            android:type="linear"
+            android:startX="0"
+            android:startY="0"
+            android:endX="108"
+            android:endY="0">
+            <item android:offset="0" android:color="#0000F2FE" />
+            <item android:offset="0.15" android:color="#FF00F2FE" />
+            <item android:offset="0.5" android:color="#FF4FACFE" />
+            <item android:offset="0.85" android:color="#FF00F2FE" />
+            <item android:offset="1" android:color="#0000F2FE" />
+        </gradient>
+    </path>
+
+</vector>
