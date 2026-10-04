@@ -169,14 +169,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 只有从方格页回来才重设：首次启动 camera 还没 bind，守卫里会空过。
-        // 原因：部分机型在 pause/resume 后不保留变焦，代码里又没有任何路径设最大值，
-        // 与其猜机型行为，不如每次回来按滑条显式对齐一次，结果恒等于滑条。
-        val wasGrid = gridOpen
+        // 方格标记仅用于挡新结果；变焦每次回来都按滑条重设。
+        // 之前只在 wasGrid 时重设，但历史页走独立 Activity 不经过 openSegments，
+        // gridOpen 一直是 false，导致从历史结果页回来永远跳过重设——这就是上报的 bug。
         gridOpen = false
-        if (wasGrid) {
-            applySliderZoom(zoomBar.progress)
-        }
+        applySliderZoom(zoomBar.progress)
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
