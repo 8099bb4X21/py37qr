@@ -51,22 +51,15 @@ case "$TAG_DATE" in
     *) TAG_DATE="$(date +%Y%m%d)" ;;
 esac
 python3 - "$TAG_DATE" <<'EOF'
-import os
 import sys
 import zipfile
 date = sys.argv[1]
 names = ["probe_tool", "qr_config.ini"]
-outs = ["/workspace/dist/Probe_tool_%s.zip" % date]
-# tag 发版时多打一份中文名包挂 Release；手动触发不打。
-ref = os.environ.get("GITHUB_REF", "")
-if ref.startswith("refs/tags/20"):
-    tag = ref.rsplit("/", 1)[-1]
-    outs.append("/workspace/dist/性能探针_%s.zip" % tag)
-for out in outs:
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name in names:
-            zf.write("/workspace/dist/" + name, name)
-    print("[OK] zip done: " + out)
+out = "/workspace/dist/Probe_tool_%s.zip" % date
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+    for name in names:
+        zf.write("/workspace/dist/" + name, name)
+print("[OK] zip done: " + out)
 EOF
 
 echo "[OK] 探测工具构建完成!"

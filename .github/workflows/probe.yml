@@ -42,9 +42,5 @@ jobs:
           path: dist/Probe_tool_*.zip
           if-no-files-found: error
 
-      - name: Create Release (on tag push only)
-        if: startsWith(github.ref, 'refs/tags/20')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: dist/性能探针_*.zip
-          generate_release_notes: true
+      # 注意：GitHub Release 附件 API 会剥离中文文件名（20261005 已验证三次），
+      # 探针中文包不再自动挂 Release，改手动上传；误用 softprops 会复造坏附件。
