@@ -8,6 +8,8 @@
 帧组合序列(splitmix32 + frameSeed + frameComposition)是全整数确定性算法，
 Python 生成端与 Kotlin 解码端各写同一份，bit 级一致，无浮点漂移。
 帧用文本协议避免二进制进 QR："PYQRF1:sid:seq:k:blockLen:totalLen:fnv:base64"。
+长文先 gzip -9 择优压缩（压后更小才用），压缩帧前缀换成 "PYQRF2"，结构同形；
+短文单码恒为原文明文。totalLen/fnv 均指传输层载荷（压缩后字节）。
 块按 blockLen 字节对齐，末块补 0；XOR 按字节；还原后按 totalLen 截断。
 """
 
@@ -28,7 +30,7 @@ def try_gzip_compress(data):
     try:
         raw = bytes(data)
     except Exception:
-        return bytes(data), False
+        return b"", False
     if len(raw) < 1:
         return raw, False
     try:

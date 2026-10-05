@@ -131,9 +131,7 @@ class MainActivity : AppCompatActivity() {
             openSegments(SegmentActivity.MODE_SCAN, text)
             return
         }
-        if (frame.k < 1 || frame.k > 4096 || frame.blockLen < 1 || frame.totalLen < 1) {
-            return
-        }
+        // parseFrame 已做全量合法性校验（含上限），此处不再重复判。
         val cur = decoder
         if (cur == null || cur.sessionId != frame.sessionId ||
             cur.k != frame.k || cur.blockLen != frame.blockLen ||
@@ -238,7 +236,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun gunzip(data: ByteArray): ByteArray? {
-        // PYQRF2 载荷解压；失败返回 null，按重扫处理，不崩溃。
+        // PYQRF2 载荷解压；失败或膨胀超 8MB 返回 null，按重扫处理，不崩溃。
+        // 8MB 与帧协议 totalLen 上限同档，防 crafted 帧炸内存。
         return try {
             java.util.zip.GZIPInputStream(data.inputStream()).use { gis ->
                 val out = java.io.ByteArrayOutputStream()
@@ -246,6 +245,7 @@ class MainActivity : AppCompatActivity() {
                 while (true) {
                     val n = gis.read(buf)
                     if (n < 0) break
+                    if (out.size() + n > 8 * 1024 * 1024) return null
                     out.write(buf, 0, n)
                 }
                 out.toByteArray()

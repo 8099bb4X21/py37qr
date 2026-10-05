@@ -25,6 +25,13 @@ sed "s|^Exec=.*|Exec=$HOME/.local/bin/qr_tool %F|" qr_tool.desktop > ~/.local/sh
 
 用法：安装 APK，授予相机权限，对准二维码，保持到提示集齐。
 
+## 传输说明
+
+- 短文字：一张静态码，内容即原文，任意扫码 App 可读。
+- 长文字：先 gzip -9 择优压缩（压不动则原文直发），再喷泉码切片轮播。
+- 压缩帧前缀为 `PYQRF2`（原文帧为 `PYQRF1`），须用配套版本 App 扫码。
+- 无新增依赖（gzip 为 Python 标准库）。
+
 ## 配置文件
 
 `qr_config.ini` 与程序放同一目录，改完重启生效：

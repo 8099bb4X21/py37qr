@@ -278,6 +278,16 @@ class QrApp:
         self.text_widget.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
         self.text_widget.bind("<KeyRelease>", self.on_text_change)
+        # UOS/Linux 下 Tk 输入框默认 Ctrl+A=跳行首（非全选），
+        # 且 Ctrl+C/X/V 无 Win 习惯行为，这里显式补上并吃掉默认键行为。
+        self.text_widget.bind("<Control-a>", self.select_all_text)
+        self.text_widget.bind("<Control-A>", self.select_all_text)
+        self.text_widget.bind("<Control-c>", lambda event: self.forward_clipboard(event, "<<Copy>>"))
+        self.text_widget.bind("<Control-C>", lambda event: self.forward_clipboard(event, "<<Copy>>"))
+        self.text_widget.bind("<Control-x>", lambda event: self.forward_clipboard(event, "<<Cut>>"))
+        self.text_widget.bind("<Control-X>", lambda event: self.forward_clipboard(event, "<<Cut>>"))
+        self.text_widget.bind("<Control-v>", lambda event: self.forward_clipboard(event, "<<Paste>>"))
+        self.text_widget.bind("<Control-V>", lambda event: self.forward_clipboard(event, "<<Paste>>"))
 
         self.count_label = tk.Label(left, text="字符: 0", anchor="w", justify="left")
         self.count_label.pack(anchor="w", pady=(6, 0))
@@ -348,6 +358,21 @@ class QrApp:
         self.update_counts_fast()
         self.schedule_auto_generate()
 
+    def select_all_text(self, event):
+        # Ctrl+A 全选：覆盖 Linux 默认的跳行首行为。
+        event.widget.tag_add("sel", "1.0", "end-1c")
+        event.widget.mark_set("insert", "end-1c")
+        event.widget.see("insert")
+        return "break"
+
+    def forward_clipboard(self, event, virtual):
+        # Ctrl+C/X/V 转调输入框原生 <<Copy>>/<<Cut>>/<<Paste>>，吃掉默认键行为。
+        try:
+            event.widget.event_generate(virtual)
+        except Exception:
+            pass
+        return "break"
+
     def update_counts_fast(self):
         # 每次按键立即刷新字符/字节数（纯计算不渲染不生成）；生成仍走 2 秒防抖。
         raw = self.text_widget.get("1.0", "end-1c")
@@ -369,6 +394,9 @@ class QrApp:
         # 单码静止 / 喷泉轮播的统一入口，UI 线程同步生成(单帧渲染 ~0.05s)。
         self.debounce_id = None
         self.stop_carousel()
+        # 参数回写 ini：之前只读不存，轮播间隔/分辨率改后重启丢失，此处补上。
+        # _ini_upsert 值相同零写入，空输入也照存参数。
+        self.persist_params_to_ini()
         raw = self.text_widget.get("1.0", "end-1c")
         if raw.strip() == "":
             self.stream = None
@@ -451,7 +479,24 @@ class QrApp:
     def apply_interval(self):
         # 防抖到期真正应用轮播间隔（与 restart_carousel 分开，便于单测与复用）。
         self.interval_debounce_id = None
+        self.persist_params_to_ini()
         self.restart_carousel()
+
+    def persist_params_to_ini(self):
+        # 分辨率与轮播间隔是 ini 已有键，变了就回写；纠错档无 ini 键，保持会话级。
+        # 目录只读等异常静默跳过，不影响生成主流程。
+        try:
+            _ini_upsert(find_config_path(), "carousel", {
+                "interval_ms": str(self.get_interval()),
+            }, overwrite=True)
+        except Exception:
+            pass
+        try:
+            _ini_upsert(find_config_path(), "qr", {
+                "box_size": str(self.get_box()),
+            }, overwrite=True)
+        except Exception:
+            pass
 
     def restart_carousel(self):
         # 按当前轮播间隔重启节奏（喷泉轮播中才有效）。
@@ -477,7 +522,8 @@ class QrApp:
                 + " / 轮播 " + str(self.stream.k) + " 块" + extra)
 
     def on_save(self):
-        # 单码存 1 张；喷泉存 k 张系统帧(seq 0..k-1，按序即原文)。
+        # 单码存 1 张；喷泉存 k 张系统帧(seq 0..k-1)。
+        # 系统帧按序拼 = 传输层载荷：未压缩时即原文，压缩时需还原后再 gunzip。
         if self.stream is None:
             self.set_status("没有可保存的内容", True)
             return
