@@ -23,7 +23,8 @@ import statistics
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if not getattr(sys, "frozen", False):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import qr_converter
 
@@ -38,13 +39,18 @@ PROBE_HEADROOM = 0.7
 PROBE_SEED = 42
 
 
+def get_base_dir():
+    # frozen 单文件时取 exe 所在目录，否则取工程根（test/ 的上层）。
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def read_interval_ms():
     # 只读轮播间隔；读不到用 100，与 qr_gui 默认一致。
+    # ini 与 probe_tool 放同一目录（zip 包自带一份，可按需改）。
     default_ms = 100
-    ini_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "qr_config.ini",
-    )
+    ini_path = os.path.join(get_base_dir(), "qr_config.ini")
     try:
         parser = configparser.ConfigParser()
         parser.read(ini_path, encoding="utf-8")

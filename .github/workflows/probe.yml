@@ -1,11 +1,12 @@
 name: Probe QR perf ARM64
 
-# 只读权限：跑探测不发版不写仓库。
+# 只读权限：打探测工具包，不发版不写仓库。
 permissions:
   contents: read
 
 on:
-  # 手动触发：Actions 页选本工作流点 Run workflow，跑完在 Artifacts 取表。
+  # 手动触发：Actions 页选本工作流点 Run workflow，
+  # 跑完在 Artifacts 下载 Probe_tool_日期.zip，解压到 UOS 直接跑 probe_tool。
   workflow_dispatch:
 
 jobs:
@@ -17,7 +18,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Probe inside ARM64 Debian 10 container
+      - name: Build probe tool inside ARM64 Debian 10 container
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace:Z \
@@ -25,9 +26,9 @@ jobs:
             arm64v8/debian:10-slim \
             bash .github/scripts/probe-qr.sh
 
-      - name: Upload probe result
+      - name: Upload probe tool
         uses: actions/upload-artifact@v4
         with:
-          name: qr-probe-result
-          path: probe_result.txt
+          name: probe-tool-debian10-arm64
+          path: dist/Probe_tool_*.zip
           if-no-files-found: error
