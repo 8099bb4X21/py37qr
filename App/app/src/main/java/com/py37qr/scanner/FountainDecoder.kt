@@ -1,12 +1,14 @@
 package com.py37qr.scanner
 
 // LT 喷泉解码器：抓够 k 个不同有效帧即还原，顺序/丢帧无关。
+// compressed 只做会话标记与解压分支，消元数学与原文/压缩无关。
 class FountainDecoder(
     val k: Int,
     val blockLen: Int,
     val sessionId: Int,
     val totalLen: Int,
     val payloadFnv: Long,
+    val compressed: Boolean = false,
 ) {
     private class PendingFrame(var idx: MutableSet<Int>, var words: ByteArray)
 

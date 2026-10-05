@@ -73,11 +73,15 @@ def build_qr_image(text, box_size, border, error_name):
 
 class EncodedStream:
     # 文字 -> 单码(1 帧) 或 喷泉轮播(2k 帧)。GUI 轮播源。
+    # 单码恒为原文明文；长文才 gzip 择优压缩后再喷泉切片。
 
     def __init__(self, text, error_name="M", block_len=200):
         # 判定单码/轮播：纯文本能否塞进一个 QR，能则静止，否则喷泉切片。
         self.error_name = get_error_correction(error_name)
         self.text = text
+        self.compressed = False
+        self.raw_len = len(text.encode("utf-8"))
+        self.payload_len = self.raw_len
         payload = text.encode("utf-8")
         try:
             try_encode(text, self.error_name)
@@ -88,7 +92,10 @@ class EncodedStream:
             self.encoder = None
             self.k = 1
         else:
-            self.encoder = fountain.FountainEncoder(payload, block_len=block_len)
+            payload, self.compressed = fountain.try_gzip_compress(payload)
+            self.payload_len = len(payload)
+            self.encoder = fountain.FountainEncoder(
+                payload, block_len=block_len, compressed=self.compressed)
             self.k = self.encoder.k
 
     def frame_count(self):

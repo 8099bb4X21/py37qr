@@ -26,7 +26,8 @@ import zxingcpp.BarcodeReader
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-// 与 PC 端 fountain.py 协议一致：帧文本 "PYQRF1:sid:seq:k:blockLen:totalLen:fnv:base64"。
+// 与 PC 端 fountain.py 协议一致：
+// "PYQRF1:..." 载荷是原文 UTF-8；"PYQRF2:..." 载荷是 gzip 字节（解完再转 UTF-8）。
 private data class FrameHeader(
     val sessionId: Int,
     val seq: Long,
@@ -35,6 +36,7 @@ private data class FrameHeader(
     val totalLen: Int,
     val payloadFnv: Long,
     val block: ByteArray,
+    val compressed: Boolean,
 )
 
 class MainActivity : AppCompatActivity() {
@@ -135,10 +137,11 @@ class MainActivity : AppCompatActivity() {
         val cur = decoder
         if (cur == null || cur.sessionId != frame.sessionId ||
             cur.k != frame.k || cur.blockLen != frame.blockLen ||
-            cur.totalLen != frame.totalLen
+            cur.totalLen != frame.totalLen || cur.compressed != frame.compressed
         ) {
             decoder = FountainDecoder(
-                frame.k, frame.blockLen, frame.sessionId, frame.totalLen, frame.payloadFnv
+                frame.k, frame.blockLen, frame.sessionId, frame.totalLen, frame.payloadFnv,
+                frame.compressed
             )
         }
         decoder?.addFrame(frame.seq, frame.block)
@@ -147,7 +150,12 @@ class MainActivity : AppCompatActivity() {
             val bytes = d.assemble()
             decoder = null
             if (bytes != null) {
-                val full = String(bytes, Charsets.UTF_8)
+                val raw = if (d.compressed) gunzip(bytes) else bytes
+                if (raw == null) {
+                    statusText.text = "解压失败，请重扫"
+                    return
+                }
+                val full = String(raw, Charsets.UTF_8)
                 saveToHistory(full)
                 openSegments(SegmentActivity.MODE_SCAN, full)
             } else {
@@ -201,7 +209,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun parseFrame(text: String): FrameHeader? {
-        if (!text.startsWith("PYQRF1:")) return null
+        val compressed = when {
+            text.startsWith("PYQRF1:") -> false
+            text.startsWith("PYQRF2:") -> true
+            else -> return null
+        }
         val parts = text.split(":")
         if (parts.size != 8) return null
         return try {
@@ -219,7 +231,25 @@ class MainActivity : AppCompatActivity() {
             if (totalLen < 1 || totalLen > 8 * 1024 * 1024) return null
             if (totalLen > blockLen.toLong() * k) return null
             if (block.size != blockLen) return null
-            FrameHeader(sessionId, seq, k, blockLen, totalLen, fnv, block)
+            FrameHeader(sessionId, seq, k, blockLen, totalLen, fnv, block, compressed)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun gunzip(data: ByteArray): ByteArray? {
+        // PYQRF2 载荷解压；失败返回 null，按重扫处理，不崩溃。
+        return try {
+            java.util.zip.GZIPInputStream(data.inputStream()).use { gis ->
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(4096)
+                while (true) {
+                    val n = gis.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                }
+                out.toByteArray()
+            }
         } catch (e: Exception) {
             null
         }

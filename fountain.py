@@ -12,12 +12,40 @@ Python 生成端与 Kotlin 解码端各写同一份，bit 级一致，无浮点�
 """
 
 import base64
+import gzip
 import random
 
 
 FRAME_PREFIX = "PYQRF1"
+COMPRESSED_PREFIX = "PYQRF2"
 REPAIR_DEGREE_MIN = 4
 REPAIR_DEGREE_MAX = 24
+
+
+def try_gzip_compress(data):
+    # 压缩先行：gzip -9 择优，压后更小才用；失败/膨胀返回原文。
+    # 返回 (载荷字节, 是否压缩)。只走标准库，py37/离线可用。
+    try:
+        raw = bytes(data)
+    except Exception:
+        return bytes(data), False
+    if len(raw) < 1:
+        return raw, False
+    try:
+        gz = gzip.compress(raw, compresslevel=9)
+    except Exception:
+        return raw, False
+    if len(gz) < len(raw):
+        return gz, True
+    return raw, False
+
+
+def gzip_decompress(data):
+    # 解压传输层载荷；失败返回 None（调用方按校验失败处理）。
+    try:
+        return gzip.decompress(bytes(data))
+    except Exception:
+        return None
 
 
 def _u32(value):
@@ -87,11 +115,13 @@ def xor_bytes(a, b):
 
 class FountainEncoder:
     # 把字节切成 k 块，按 seq 生成喷泉帧。
+    # payload 是传输层载荷：原文 UTF-8 或 gzip 字节；compressed 只决定帧前缀。
 
-    def __init__(self, payload, block_len=200, session_id=None):
+    def __init__(self, payload, block_len=200, session_id=None, compressed=False):
         if not payload:
             raise ValueError("payload 为空")
         self.payload = bytes(payload)
+        self.compressed = bool(compressed)
         self.total_len = len(self.payload)
         self.block_len = int(block_len)
         if self.block_len < 1:
@@ -116,8 +146,9 @@ class FountainEncoder:
 
     def frame_text(self, seq):
         b64 = base64.b64encode(self.frame_bytes(seq)).decode("ascii")
+        prefix = COMPRESSED_PREFIX if self.compressed else FRAME_PREFIX
         return (
-            FRAME_PREFIX + ":" + format(self.session_id, "04x") + ":" + str(seq)
+            prefix + ":" + format(self.session_id, "04x") + ":" + str(seq)
             + ":" + str(self.k) + ":" + str(self.block_len) + ":" + str(self.total_len)
             + ":" + format(self.payload_fnv, "08x") + ":" + b64
         )
@@ -125,11 +156,14 @@ class FountainEncoder:
 
 def parse_frame_text(text):
     # 解析文本帧；非本协议返回 None。与 Kotlin 端同规则。
+    # 双前缀都认：PYQRF1=原文载荷，PYQRF2=gzip 载荷；旧单前缀帧照常通过。
     parts = text.split(":")
-    if len(parts) != 8 or parts[0] != FRAME_PREFIX:
+    if len(parts) != 8 or parts[0] not in (FRAME_PREFIX, COMPRESSED_PREFIX):
         return None
     try:
         data = {
+            "prefix": parts[0],
+            "compressed": parts[0] == COMPRESSED_PREFIX,
             "sessionId": int(parts[1], 16),
             "seq": int(parts[2]),
             "k": int(parts[3]),

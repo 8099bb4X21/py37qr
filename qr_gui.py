@@ -393,8 +393,13 @@ class QrApp:
             self.carousel_pos = 0
             self.show_frame(0)
             self.frame_label.configure(text="帧 1/" + str(self.stream.frame_count()))
-            self.set_status(
-                "已拆 " + str(self.stream.k) + " 块，轮播中(免顺序，App 抓够即还原)", False)
+            if self.stream.compressed:
+                self.set_status(
+                    "已压缩 " + str(self.stream.raw_len) + "->" + str(self.stream.payload_len)
+                    + " 字节，拆 " + str(self.stream.k) + " 块，轮播中(免顺序，App 抓够即还原)", False)
+            else:
+                self.set_status(
+                    "不可压，用原文直发，已拆 " + str(self.stream.k) + " 块，轮播中(免顺序，App 抓够即还原)", False)
             self.schedule_carousel()
 
     def show_frame(self, pos):
@@ -464,9 +469,12 @@ class QrApp:
         elif self.stream.single:
             self.count_label.configure(text="字符: " + str(len(raw)) + " / 字节: " + str(used) + " / 单码")
         else:
+            extra = ""
+            if self.stream.compressed:
+                extra = " / 压缩 " + str(self.stream.raw_len) + "->" + str(self.stream.payload_len)
             self.count_label.configure(
                 text="字符: " + str(len(raw)) + " / 字节: " + str(used)
-                + " / 轮播 " + str(self.stream.k) + " 块")
+                + " / 轮播 " + str(self.stream.k) + " 块" + extra)
 
     def on_save(self):
         # 单码存 1 张；喷泉存 k 张系统帧(seq 0..k-1，按序即原文)。

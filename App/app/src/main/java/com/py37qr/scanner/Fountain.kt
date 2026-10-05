@@ -4,6 +4,7 @@ package com.py37qr.scanner
 // 所有 32 位运算用 Long 承载(0..0xFFFFFFFF)再截断，避免 Int 负数取模差异。
 object Fountain {
     const val FRAME_PREFIX = "PYQRF1"
+    const val COMPRESSED_PREFIX = "PYQRF2"
 
     fun splitmix32(seed: Long): () -> Long {
         var s = seed and 0xFFFFFFFFL

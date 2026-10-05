@@ -76,7 +76,7 @@ check("短文字单码", short.single and short.frame_count() == 1)
 long_stream = qr_converter.EncodedStream("长" * 3000, error_name="M", block_len=120)
 check("长文字喷泉轮播", (not long_stream.single) and long_stream.frame_count() == 2 * long_stream.k)
 
-# 4. 轮播帧可完整还原原文
+# 4. 轮播帧可完整还原原文（含 gzip 择优：载荷可能是压缩字节）
 dec = fountain.FountainDecoder(
     long_stream.encoder.k, long_stream.encoder.block_len,
     long_stream.encoder.session_id, long_stream.encoder.total_len,
@@ -84,7 +84,43 @@ dec = fountain.FountainDecoder(
 for i in range(fountain.cycle_length(long_stream.k)):
     parsed = fountain.parse_frame_text(long_stream.frame_text(i))
     dec.add_frame(parsed["seq"], parsed["block"])
-check("轮播帧完整还原", dec.assemble() == ("长" * 3000).encode("utf-8"))
+_raw_out = dec.assemble()
+if long_stream.compressed:
+    check("轮播帧完整还原", fountain.gzip_decompress(_raw_out) == ("长" * 3000).encode("utf-8"))
+else:
+    check("轮播帧完整还原", _raw_out == ("长" * 3000).encode("utf-8"))
+
+# 4b. P0-1 压缩先行：中文长文应触发压缩且 k 变小；单码保持原文
+raw_long = ("长文测试，压缩先行。" * 500).encode("utf-8")
+gz_payload, gz_flag = fountain.try_gzip_compress(raw_long)
+check("中文长文触发gzip", gz_flag and len(gz_payload) < len(raw_long))
+enc_raw = fountain.FountainEncoder(raw_long, block_len=120, session_id=11)
+enc_gz = fountain.FountainEncoder(gz_payload, block_len=120, session_id=11, compressed=True)
+check("压缩后k变小", enc_gz.k < enc_raw.k)
+check("压缩帧前缀PYQRF2", enc_gz.frame_text(0).startswith("PYQRF2:"))
+check("原文帧前缀PYQRF1", enc_raw.frame_text(0).startswith("PYQRF1:"))
+p_gz = fountain.parse_frame_text(enc_gz.frame_text(3))
+check("压缩帧解析回compressed", p_gz is not None and p_gz["compressed"] is True)
+p_raw = fountain.parse_frame_text(enc_raw.frame_text(3))
+check("原文帧解析回非压缩", p_raw is not None and p_raw["compressed"] is False)
+# 压缩端到端：丢 30% 仍还原再解压
+dec2 = fountain.FountainDecoder(
+    enc_gz.k, enc_gz.block_len, enc_gz.session_id, enc_gz.total_len, enc_gz.payload_fnv)
+import random as _rd
+_rd.seed(11)
+for seq in range(fountain.cycle_length(enc_gz.k) * 4):
+    if _rd.random() < 0.3:
+        continue
+    _pp = fountain.parse_frame_text(enc_gz.frame_text(seq))
+    dec2.add_frame(_pp["seq"], _pp["block"])
+    if dec2.is_complete():
+        break
+check("压缩载荷丢帧还原", fountain.gzip_decompress(dec2.assemble()) == raw_long)
+# 旧 PYQRF1 帧（无 compressed 概念前）仍按非压缩通过
+check("旧帧兼容", fountain.parse_frame_text("PYQRF1:0001:3:5:200:1000:00000000:" + _good_block) is not None)
+# 单码路径恒为原文（不压缩）
+_single = qr_converter.EncodedStream("你好", error_name="M")
+check("单码不压缩", _single.single and (not _single.compressed) and _single.frame_text(0) == "你好")
 
 # 5. 二维码图片可解码(仅验证 PNG 渲染，不依赖 zbar)
 img = qr_converter.build_qr_image(short.frame_text(0), 4, 4, "M")
