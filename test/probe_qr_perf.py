@@ -174,6 +174,7 @@ def probe():
 
 
 def report(interval_ms, rows):
+
     # 只留最坏情形一行一档：box | 显示多大 | 一帧最慢 | 能不能跟上。
     print("")
     print("尺寸box | 显示多大 | 一帧最慢 | 跟得上吗")
@@ -207,9 +208,59 @@ def report(interval_ms, rows):
           + "，再大就可能掉帧。当前默认 box=4，可直接在界面里调大。")
 
 
+class TeeLogger:
+    # 控制台与日志文件双写：在文件管理器双击运行时终端一闪而过，靠日志文件兜底。
+
+    def __init__(self, *targets):
+        self.targets = targets
+
+    def write(self, data):
+        for target in self.targets:
+            try:
+                target.write(data)
+            except Exception:
+                pass
+
+    def flush(self):
+        for target in self.targets:
+            try:
+                target.flush()
+            except Exception:
+                pass
+
+
+def open_log_file():
+    # 日志落 exe 同目录，带时间戳防覆盖；打不开就只走控制台。
+    try:
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(get_base_dir(), "probe_log_" + stamp + ".txt")
+        return open(path, "w", encoding="utf-8"), path
+    except Exception:
+        return None, None
+
+
 def main():
-    interval_ms, rows = probe()
-    report(interval_ms, rows)
+    log_handle, log_path = open_log_file()
+    if log_handle is not None:
+        sys.stdout = TeeLogger(sys.stdout, log_handle)
+    try:
+        interval_ms, rows = probe()
+        report(interval_ms, rows)
+    finally:
+        if log_handle is not None:
+            try:
+                log_handle.close()
+            except Exception:
+                pass
+    if log_path is not None:
+        print("日志已存: " + log_path)
+    # 终端手工运行时停一下看结论；管道/双击无 stdin 时直接退出。
+    if sys.stdin.isatty():
+        print("按回车退出...", end="", flush=True)
+        try:
+            sys.stdin.readline()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
