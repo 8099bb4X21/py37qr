@@ -76,6 +76,10 @@ class EncodedStream:
     # 文字 -> 单码(1 帧) 或 喷泉轮播(2k 帧)。GUI 轮播源。
     # 单码恒为原文明文；长文才 gzip 择优压缩后再喷泉切片。
 
+    # 帧对象缓存上限：轮播同帧反复渲染，segno 编码只做一次；
+    # 超长文本帧数太多时不缓存，防矩阵对象吃内存。
+    QR_CACHE_MAX_FRAMES = 256
+
     def __init__(self, text, error_name="M", block_len=200):
         # 判定单码/轮播：纯文本能否塞进一个 QR，能则静止，否则喷泉切片。
         self.error_name = get_error_correction(error_name)
@@ -83,6 +87,7 @@ class EncodedStream:
         self.compressed = False
         self.raw_len = len(text.encode("utf-8"))
         self.payload_len = self.raw_len
+        self._qr_cache = {}
         payload = text.encode("utf-8")
         try:
             try_encode(text, self.error_name)
@@ -110,6 +115,17 @@ class EncodedStream:
         if self.single:
             return self.text
         return self.encoder.frame_text(seq)
+
+    def qr_code(self, seq):
+        # 第 seq 帧的 segno 对象；轮播缓存命中直接返回，不命中编码一次后存入。
+        # 新 EncodedStream 自带空缓存，换文本即失效，不存在脏数据。
+        cached = self._qr_cache.get(seq)
+        if cached is not None:
+            return cached
+        qr = try_encode(self.frame_text(seq), self.error_name)
+        if self.frame_count() <= self.QR_CACHE_MAX_FRAMES:
+            self._qr_cache[seq] = qr
+        return qr
 
 
 def save_qr_images(images, base_path):

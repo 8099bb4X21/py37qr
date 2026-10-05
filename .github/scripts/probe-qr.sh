@@ -44,18 +44,29 @@ pyinstaller --onefile \
 # 包内自带一份默认 ini（与 probe_tool 同目录，改完直接生效，不用重打包）。
 cp /workspace/qr_config.ini /workspace/dist/qr_config.ini
 
-# 日期 zip 包：手动触发取当天日期（与 build-qr.sh 同规则）。
-TAG_DATE="$(date +%Y%m%d)"
+# 日期处理与 build-qr.sh 同规则：TAG_DATE 非 8 位日期回退当天。
+TAG_DATE="${TAG_DATE:-$(date +%Y%m%d)}"
+case "$TAG_DATE" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) TAG_DATE="$(date +%Y%m%d)" ;;
+esac
 python3 - "$TAG_DATE" <<'EOF'
+import os
 import sys
 import zipfile
 date = sys.argv[1]
 names = ["probe_tool", "qr_config.ini"]
-out = "/workspace/dist/Probe_tool_%s.zip" % date
-with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-    for name in names:
-        zf.write("/workspace/dist/" + name, name)
-print("[OK] zip done: " + out)
+outs = ["/workspace/dist/Probe_tool_%s.zip" % date]
+# tag 发版时多打一份中文名包挂 Release；手动触发不打。
+ref = os.environ.get("GITHUB_REF", "")
+if ref.startswith("refs/tags/20"):
+    tag = ref.rsplit("/", 1)[-1]
+    outs.append("/workspace/dist/性能探针_%s.zip" % tag)
+for out in outs:
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in names:
+            zf.write("/workspace/dist/" + name, name)
+    print("[OK] zip done: " + out)
 EOF
 
 echo "[OK] 探测工具构建完成!"

@@ -122,6 +122,13 @@ check("旧帧兼容", fountain.parse_frame_text("PYQRF1:0001:3:5:200:1000:000000
 _single = qr_converter.EncodedStream("你好", error_name="M")
 check("单码不压缩", _single.single and (not _single.compressed) and _single.frame_text(0) == "你好")
 
+# 4c. 轮播帧对象缓存：同 seq 命中同一对象，矩阵与现编一致
+_q0a = long_stream.qr_code(0)
+_q0b = long_stream.qr_code(0)
+check("缓存命中同一对象", _q0a is _q0b)
+_fresh = qr_converter.try_encode(long_stream.frame_text(0), "M")
+check("缓存矩阵与现编一致", list(_q0a.matrix) == list(_fresh.matrix))
+
 # 5. 二维码图片可解码(仅验证 PNG 渲染，不依赖 zbar)
 img = qr_converter.build_qr_image(short.frame_text(0), 4, 4, "M")
 check("渲染单码图", img is not None and img.size[0] > 0)

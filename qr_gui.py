@@ -458,9 +458,10 @@ class QrApp:
     def show_frame(self, pos):
         # 渲染第 pos 帧并缩略显示。预览尺寸界面可调（默认 4，UOS 实测 55ms 档
         # box=6 最坏 18.5ms 也稳；再大就得加宽窗口，范围钳在 2~12）。
-        text = self.stream.frame_text(pos)
-        img = qr_converter.build_qr_image(
-            text, self.get_preview_box(), PREVIEW_BORDER, self.stream.error_name)
+        # segno 对象走轮播缓存，不逐帧重编，单帧只剩渲染开销，防卡顿共振。
+        qr = self.stream.qr_code(pos)
+        img = qr_converter.render_qr_image(
+            qr, self.get_preview_box(), PREVIEW_BORDER)
         thumb = img.copy()
         thumb.thumbnail((PREVIEW_SIZE, PREVIEW_SIZE))
         photo = ImageTk.PhotoImage(thumb)
@@ -570,8 +571,8 @@ class QrApp:
                 images = [qr_converter.build_qr_image(
                     self.stream.frame_text(0), box, FIXED_BORDER, self.stream.error_name)]
             else:
-                images = [qr_converter.build_qr_image(
-                    self.stream.frame_text(i), box, FIXED_BORDER, self.stream.error_name)
+                images = [qr_converter.render_qr_image(
+                    self.stream.qr_code(i), box, FIXED_BORDER)
                     for i in range(self.stream.k)]
             saved = qr_converter.save_qr_images(images, target)
         except Exception as exc:
