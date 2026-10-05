@@ -174,28 +174,37 @@ def probe():
 
 
 def report(interval_ms, rows):
+    # 只留最坏情形一行一档：box | 显示多大 | 一帧最慢 | 能不能跟上。
     print("")
-    print("样品 | 纠错 | box | 显示px | 编码 | 放大 | 缩略 | 上屏 | 合计")
-    for row in rows:
-        print(row["sample"] + " | " + row["level"] + " | " + str(row["box"])
-              + " | " + str(row["px"]) + " | " + format(row["encode"], ".1f")
-              + " | " + format(row["render"], ".1f") + " | " + format(row["thumb"], ".1f")
-              + " | " + format(row["photo"], ".1f") + " | " + format(row["total"], ".1f"))
-    print("")
-    print("[结论] 最坏情形（取样品×纠错的最大合计）：")
+    print("尺寸box | 显示多大 | 一帧最慢 | 跟得上吗")
     limit = interval_ms * PROBE_HEADROOM
+    best_box = PROBE_BOXES[0]
     for box in PROBE_BOXES:
         worst = 0.0
+        biggest_px = 0
+        count = 0
         for row in rows:
-            if row["box"] == box and row["total"] > worst:
+            if row["box"] != box:
+                continue
+            count += 1
+            if row["total"] > worst:
                 worst = row["total"]
+            if row["px"] > biggest_px:
+                biggest_px = row["px"]
+        if count == 0:
+            continue
         if worst <= limit:
-            mark = "稳"
+            mark = "可以"
+            best_box = box
         elif worst <= interval_ms:
-            mark = "临界"
+            mark = "有点悬"
         else:
-            mark = "跟不上"
-        print("box=" + str(box) + " 最坏 " + format(worst, ".1f") + "ms -> " + mark)
+            mark = "不行"
+        print("box=" + str(box) + " | 约" + str(biggest_px) + "像素 | "
+              + format(worst, ".0f") + "毫秒 | " + mark)
+    print("")
+    print("[结论] 你这台机：预览尺寸最大可用到 box=" + str(best_box)
+          + "，再大就可能掉帧。当前默认 box=4，可直接在界面里调大。")
 
 
 def main():

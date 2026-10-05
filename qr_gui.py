@@ -31,12 +31,12 @@ CONFIG_FILE = "qr_config.ini"
 LOG_FILE = "qr_debug.log"
 DEBOUNCE_MS = 2000
 PREVIEW_SIZE = 460
-PREVIEW_BOX = 4
 PREVIEW_BORDER = 4
 FIXED_BORDER = 4
 DEFAULT_BLOCK_LEN = 200
 DEFAULT_INTERVAL_MS = 100
 DEFAULT_BOX_SIZE = 10
+DEFAULT_PREVIEW_BOX = 4
 LEFT_WIDTH = 250
 WIN_MIN_W = 820
 WIN_MIN_H = 600
@@ -66,15 +66,16 @@ def find_config_path():
 
 def load_app_config():
     # 读 ini 全量配置，每项独立 try，坏一项不影响其他项的默认值。
-    # 返回 (debug, interval_ms, box_size)。
+    # 返回 (debug, interval_ms, box_size, preview_box)。
     debug = False
     interval_ms = DEFAULT_INTERVAL_MS
     box_size = DEFAULT_BOX_SIZE
+    preview_box = DEFAULT_PREVIEW_BOX
     try:
         parser = configparser.ConfigParser()
         parser.read(find_config_path(), encoding="utf-8")
     except Exception:
-        return debug, interval_ms, box_size
+        return debug, interval_ms, box_size, preview_box
     try:
         debug = parser.get("general", "debug", fallback="0").strip() == "1"
     except Exception:
@@ -87,14 +88,20 @@ def load_app_config():
         box_size = int(parser.get("qr", "box_size", fallback="10"))
     except Exception:
         pass
+    try:
+        preview_box = int(parser.get("preview", "box", fallback="4"))
+    except Exception:
+        pass
     if interval_ms < 50 or interval_ms > 2000:
         interval_ms = DEFAULT_INTERVAL_MS
     if box_size < 4 or box_size > 20:
         box_size = DEFAULT_BOX_SIZE
-    return debug, interval_ms, box_size
+    if preview_box < 2 or preview_box > 12:
+        preview_box = DEFAULT_PREVIEW_BOX
+    return debug, interval_ms, box_size, preview_box
 
 
-DEBUG, APP_INTERVAL_MS, APP_BOX_SIZE = load_app_config()
+DEBUG, APP_INTERVAL_MS, APP_BOX_SIZE, APP_PREVIEW_BOX = load_app_config()
 
 
 def _ini_upsert(path, section, items, overwrite=False):
@@ -154,13 +161,14 @@ def _ini_upsert(path, section, items, overwrite=False):
 
 
 def ensure_config_defaults():
-    # ini 缺项自动回写（只补 general/carousel/qr；window 关闭时才有真实值）。
+    # ini 缺项自动回写（只补 general/carousel/qr/preview；window 关闭时才有真实值）。
     # 返回 True=写过文件。目录只读等异常静默跳过，保证任何环境可启动。
     path = find_config_path()
     changed = False
     changed = _ini_upsert(path, "general", {"debug": "0"}) or changed
     changed = _ini_upsert(path, "carousel", {"interval_ms": "100"}) or changed
     changed = _ini_upsert(path, "qr", {"box_size": "10"}) or changed
+    changed = _ini_upsert(path, "preview", {"box": "4"}) or changed
     return changed
 
 
@@ -253,6 +261,7 @@ class QrApp:
         self.error_var = tk.StringVar(value="M")
         self.box_var = tk.IntVar(value=APP_BOX_SIZE)
         self.interval_var = tk.IntVar(value=APP_INTERVAL_MS)
+        self.preview_var = tk.IntVar(value=APP_PREVIEW_BOX)
         self.build_widgets()
         apply_window_from_config(self.root)
         self.set_status("在左侧输入文字，二维码将自动生成", False)
@@ -317,6 +326,14 @@ class QrApp:
                    command=self.schedule_interval_apply)
         self.interval_spin.pack(side="left", padx=(2, 0))
         self.interval_spin.bind("<KeyRelease>", lambda event: self.schedule_interval_apply())
+        row3 = tk.Frame(param)
+        row3.pack(fill="x", pady=(8, 0))
+        tk.Label(row3, text="预览尺寸").pack(side="left")
+        self.preview_spin = tk.Spinbox(row3, from_=2, to=12, width=3, textvariable=self.preview_var,
+                   command=self.schedule_auto_generate)
+        self.preview_spin.pack(side="left", padx=(2, 0))
+        # 预览尺寸只影响显示大小（2~12），改后 2 秒防抖重渲染，回写 ini 下次沿用。
+        self.preview_spin.bind("<KeyRelease>", lambda event: self.schedule_auto_generate())
 
         btn_row = tk.Frame(left)
         btn_row.pack(fill="x", pady=(10, 0))
@@ -353,6 +370,14 @@ class QrApp:
         except Exception:
             v = DEFAULT_INTERVAL_MS
         return max(50, min(v, 2000))
+
+    def get_preview_box(self):
+        # 预览用分辨率，只影响显示大小；非法输入回退 ini 默认。
+        try:
+            box = int(self.preview_var.get())
+        except Exception:
+            box = APP_PREVIEW_BOX
+        return max(2, min(box, 12))
 
     def on_text_change(self, event):
         self.update_counts_fast()
@@ -431,10 +456,11 @@ class QrApp:
             self.schedule_carousel()
 
     def show_frame(self, pos):
-        # 渲染第 pos 帧并缩略显示。预览固定小 box 保证轮播流畅。
+        # 渲染第 pos 帧并缩略显示。预览尺寸界面可调（默认 4，UOS 实测 55ms 档
+        # box=6 最坏 18.5ms 也稳；再大就得加宽窗口，范围钳在 2~12）。
         text = self.stream.frame_text(pos)
         img = qr_converter.build_qr_image(
-            text, PREVIEW_BOX, PREVIEW_BORDER, self.stream.error_name)
+            text, self.get_preview_box(), PREVIEW_BORDER, self.stream.error_name)
         thumb = img.copy()
         thumb.thumbnail((PREVIEW_SIZE, PREVIEW_SIZE))
         photo = ImageTk.PhotoImage(thumb)
@@ -483,7 +509,7 @@ class QrApp:
         self.restart_carousel()
 
     def persist_params_to_ini(self):
-        # 分辨率与轮播间隔是 ini 已有键，变了就回写；纠错档无 ini 键，保持会话级。
+        # 分辨率、轮播间隔与预览尺寸是 ini 已有键，变了就回写；纠错档无 ini 键，保持会话级。
         # 目录只读等异常静默跳过，不影响生成主流程。
         try:
             _ini_upsert(find_config_path(), "carousel", {
@@ -494,6 +520,12 @@ class QrApp:
         try:
             _ini_upsert(find_config_path(), "qr", {
                 "box_size": str(self.get_box()),
+            }, overwrite=True)
+        except Exception:
+            pass
+        try:
+            _ini_upsert(find_config_path(), "preview", {
+                "box": str(self.get_preview_box()),
             }, overwrite=True)
         except Exception:
             pass
@@ -638,7 +670,8 @@ def log_startup_info():
         + " segno=" + str(segno_ver) + " pillow=" + str(pil_ver)
         + " app_dir=" + APP_DIR + " config=" + find_config_path()
         + " debug=" + str(DEBUG)
-        + " interval_ms=" + str(APP_INTERVAL_MS) + " box=" + str(APP_BOX_SIZE),
+        + " interval_ms=" + str(APP_INTERVAL_MS) + " box=" + str(APP_BOX_SIZE)
+        + " preview_box=" + str(APP_PREVIEW_BOX),
     )
 
 
