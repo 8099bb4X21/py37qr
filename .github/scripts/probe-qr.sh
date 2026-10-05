@@ -50,15 +50,16 @@ case "$TAG_DATE" in
     [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
     *) TAG_DATE="$(date +%Y%m%d)" ;;
 esac
+# 包内二进制改名中文（GitHub 附件名不支持中文，只能包内用中文）；
+# Release 附件用英文名 Probe_tool_日期.zip，解压出来是 性能探针 + qr_config.ini。
 python3 - "$TAG_DATE" <<'EOF'
 import sys
 import zipfile
 date = sys.argv[1]
-names = ["probe_tool", "qr_config.ini"]
 out = "/workspace/dist/Probe_tool_%s.zip" % date
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-    for name in names:
-        zf.write("/workspace/dist/" + name, name)
+    zf.write("/workspace/dist/probe_tool", "性能探针")
+    zf.write("/workspace/dist/qr_config.ini", "qr_config.ini")
 print("[OK] zip done: " + out)
 EOF
 

@@ -6,7 +6,7 @@ permissions:
 
 on:
   # 手动触发：Actions 页选本工作流点 Run workflow，
-  # 跑完在 Artifacts 下载 Probe_tool_日期.zip，解压到 UOS 直接跑 probe_tool。
+  # 跑完在 Artifacts 下载 Probe_tool_日期.zip，解压出「性能探针」直接跑。
   workflow_dispatch:
   push:
     tags:
@@ -29,7 +29,6 @@ jobs:
         run: |
           docker run --rm \
             -e TAG_DATE \
-            -e GITHUB_REF \
             -v ${{ github.workspace }}:/workspace:Z \
             -w /workspace \
             arm64v8/debian:10-slim \
@@ -42,5 +41,11 @@ jobs:
           path: dist/Probe_tool_*.zip
           if-no-files-found: error
 
-      # 注意：GitHub Release 附件 API 会剥离中文文件名（20261005 已验证三次），
-      # 探针中文包不再自动挂 Release，改手动上传；误用 softprops 会复造坏附件。
+      # 附件用英文名（GitHub 附件名剥离中文，20261005 已验证三次）；
+      # 包内二进制已改名「性能探针」，解压即见中文，规避平台限制。
+      - name: Create Release (on tag push only)
+        if: startsWith(github.ref, 'refs/tags/20')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/Probe_tool_*.zip
+          generate_release_notes: true
