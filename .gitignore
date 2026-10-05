@@ -6,6 +6,7 @@ build/
 *.spec
 *.log
 test/out_*/
+probe_result.txt
 qr_demo*.png
 .vscode/
 plan/
