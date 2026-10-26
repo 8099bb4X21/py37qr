@@ -33,6 +33,7 @@ app.do_generate()
 root.update()
 check("短文字单码", app.stream is not None and app.stream.single)
 check("单码有预览图", app.preview_label.image is not None)
+short_preview_px = app.preview_label.image.width()
 
 # 喷泉轮播
 app.text_widget.delete("1.0", "end")
@@ -41,6 +42,10 @@ app.do_generate()
 root.update()
 check("长文字喷泉", app.stream is not None and (not app.stream.single))
 check("轮播帧数=2k", app.stream.frame_count() == 2 * app.stream.k)
+long_preview_px = app.preview_label.image.width()
+check("短码预览放大到轮播帧量级",
+      abs(short_preview_px - long_preview_px) <= max(16, long_preview_px // 10))
+print("[INFO] 预览尺寸 短码=" + str(short_preview_px) + "px 轮播帧=" + str(long_preview_px) + "px")
 
 # 手动 tick 几帧，应循环且不抛异常
 # 先停自动轮播再用 update_idletasks：避免 55ms 自续定时器让 update 一直有事件可处理而卡住。

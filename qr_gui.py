@@ -607,13 +607,34 @@ class QrApp:
         # box=6 最坏 18.5ms 也稳；再大就得加宽窗口，范围钳在 2~12）。
         # segno 对象走轮播缓存，不逐帧重编，单帧只剩渲染开销，防卡顿共振。
         qr = self.stream.qr_code(pos)
+        modules = len(qr.matrix) + PREVIEW_BORDER * 2
         img = qr_converter.render_qr_image(
-            qr, self.get_preview_box(), PREVIEW_BORDER)
+            qr, self.preview_box_for(modules), PREVIEW_BORDER)
         thumb = img.copy()
         thumb.thumbnail((PREVIEW_SIZE, PREVIEW_SIZE))
         photo = ImageTk.PhotoImage(thumb)
         self.preview_label.configure(image=photo)
         self.preview_label.image = photo
+
+    def preview_box_for(self, modules_total):
+        # 预览用的模块像素数：不小于用户设置；比轮播帧小的码（典型是短文本单码）
+        # 放大模块像素补齐到同一显示尺寸，让短码和长码在屏幕上一样大。
+        # 上限 PREVIEW_SIZE：超出后反正要 thumbnail，别白算一遍大图。
+        setting = self.get_preview_box()
+        try:
+            reference = qr_converter.fountain_frame_modules(
+                self.error_var.get(), DEFAULT_BLOCK_LEN, PREVIEW_BORDER)
+        except Exception:
+            return setting
+        if reference <= 0 or modules_total <= 0:
+            return setting
+        target_px = min(PREVIEW_SIZE, setting * reference)
+        if target_px <= setting * modules_total:
+            return setting
+        # 四舍五入取模块像素更贴近目标尺寸；再钳到 PREVIEW_SIZE 以内，
+        # 避免放大后又被 thumbnail 非整数缩小，导致模块宽窄不一。
+        box = int(round(target_px / float(modules_total)))
+        return max(setting, min(box, PREVIEW_SIZE // modules_total))
 
     def schedule_carousel(self):
         self.carousel_id = self.root.after(self.get_interval(), self.tick_carousel)

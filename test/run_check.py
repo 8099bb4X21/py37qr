@@ -133,4 +133,10 @@ check("缓存矩阵与现编一致", list(_q0a.matrix) == list(_fresh.matrix))
 img = qr_converter.build_qr_image(short.frame_text(0), 4, 4, "M")
 check("渲染单码图", img is not None and img.size[0] > 0)
 
+# 6. 预览参考边长：必须等于真实轮播帧(200 字节块)的边长，短码才能放大到同一显示量级
+_frame_stream = qr_converter.EncodedStream("轮播测试内容" * 400, error_name="M", block_len=200)
+check("预览参考边长=轮播帧边长", (
+    qr_converter.fountain_frame_modules("M", 200, 4)
+    == len(_frame_stream.qr_code(0).matrix) + 8))
+
 print("[INFO] 全部验证通过")

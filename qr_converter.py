@@ -27,6 +27,9 @@ import fountain
 
 ERROR_LEVELS = ("L", "M", "Q", "H")
 
+# 轮播帧矩阵边长按(纠错等级,块长,静默区)缓存：界面每次预览都会查，避免重复编码。
+_FRAME_MODULES_CACHE = {}
+
 
 def get_error_correction(error_name):
     # 校验并归一化纠错等级，非法输入抛 ValueError。
@@ -70,6 +73,22 @@ def build_qr_image(text, box_size, border, error_name):
     # 一段文字 -> 一张二维码 PIL 图。
     qr = try_encode(text, error_name)
     return render_qr_image(qr, box_size, border)
+
+
+def fountain_frame_modules(error_name, block_len=200, border=4):
+    # 轮播帧的矩阵边长 + 两侧静默区（单位=模块），给界面把短码放大到与轮播帧同一显示量级。
+    # 帧文本长度只由块长、几个数字位数和 base64 决定，所以用同结构哑载荷造一帧即可定版本；
+    # 结果按(等级,块长,静默区)缓存，同一次运行里只编码一次。
+    level = get_error_correction(error_name)
+    key = (level, int(block_len), int(border))
+    cached = _FRAME_MODULES_CACHE.get(key)
+    if cached is not None:
+        return cached
+    sample = fountain.FountainEncoder(
+        b"\x00" * (int(block_len) * 3), block_len=int(block_len), session_id=1)
+    modules = len(try_encode(sample.frame_text(0), level).matrix) + int(border) * 2
+    _FRAME_MODULES_CACHE[key] = modules
+    return modules
 
 
 class EncodedStream:
