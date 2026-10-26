@@ -30,6 +30,7 @@ DEBUG = False
 CONFIG_FILE = "qr_config.ini"
 LOG_FILE = "qr_debug.log"
 DEBOUNCE_MS = 2000
+CLIP_POLL_MS = 500
 PREVIEW_SIZE = 460
 PREVIEW_BORDER = 4
 FIXED_BORDER = 4
@@ -66,16 +67,17 @@ def find_config_path():
 
 def load_app_config():
     # 读 ini 全量配置，每项独立 try，坏一项不影响其他项的默认值。
-    # 返回 (debug, interval_ms, box_size, preview_box)。
+    # 返回 (debug, interval_ms, box_size, preview_box, auto_clip)。
     debug = False
     interval_ms = DEFAULT_INTERVAL_MS
     box_size = DEFAULT_BOX_SIZE
     preview_box = DEFAULT_PREVIEW_BOX
+    auto_clip = False
     try:
         parser = configparser.ConfigParser()
         parser.read(find_config_path(), encoding="utf-8")
     except Exception:
-        return debug, interval_ms, box_size, preview_box
+        return debug, interval_ms, box_size, preview_box, auto_clip
     try:
         debug = parser.get("general", "debug", fallback="0").strip() == "1"
     except Exception:
@@ -92,16 +94,20 @@ def load_app_config():
         preview_box = int(parser.get("preview", "box", fallback="4"))
     except Exception:
         pass
+    try:
+        auto_clip = parser.get("clipboard", "auto", fallback="0").strip() == "1"
+    except Exception:
+        pass
     if interval_ms < 50 or interval_ms > 2000:
         interval_ms = DEFAULT_INTERVAL_MS
     if box_size < 4 or box_size > 20:
         box_size = DEFAULT_BOX_SIZE
     if preview_box < 2 or preview_box > 12:
         preview_box = DEFAULT_PREVIEW_BOX
-    return debug, interval_ms, box_size, preview_box
+    return debug, interval_ms, box_size, preview_box, auto_clip
 
 
-DEBUG, APP_INTERVAL_MS, APP_BOX_SIZE, APP_PREVIEW_BOX = load_app_config()
+DEBUG, APP_INTERVAL_MS, APP_BOX_SIZE, APP_PREVIEW_BOX, APP_AUTO_CLIP = load_app_config()
 
 
 def _ini_upsert(path, section, items, overwrite=False):
@@ -161,7 +167,7 @@ def _ini_upsert(path, section, items, overwrite=False):
 
 
 def ensure_config_defaults():
-    # ini 缺项自动回写（只补 general/carousel/qr/preview；window 关闭时才有真实值）。
+    # ini 缺项自动回写（只补 general/carousel/qr/preview/clipboard；window 关闭时才有真实值）。
     # 返回 True=写过文件。目录只读等异常静默跳过，保证任何环境可启动。
     path = find_config_path()
     changed = False
@@ -169,6 +175,7 @@ def ensure_config_defaults():
     changed = _ini_upsert(path, "carousel", {"interval_ms": "100"}) or changed
     changed = _ini_upsert(path, "qr", {"box_size": "10"}) or changed
     changed = _ini_upsert(path, "preview", {"box": "4"}) or changed
+    changed = _ini_upsert(path, "clipboard", {"auto": "0"}) or changed
     return changed
 
 
@@ -260,6 +267,10 @@ class QrApp:
         self.carousel_pos = 0
         # 生成成功后置 True：点击输入框时全选旧文本，方便直接粘贴覆盖。
         self.auto_select_pending = False
+        # 剪贴板自动读取：轮询定时器 id 与上次读到的文本（用于判断是否变化）。
+        self.clip_poll_id = None
+        self.last_clip_text = None
+        self.auto_clip_var = tk.BooleanVar(value=APP_AUTO_CLIP)
         self.error_var = tk.StringVar(value="M")
         self.box_var = tk.IntVar(value=APP_BOX_SIZE)
         self.interval_var = tk.IntVar(value=APP_INTERVAL_MS)
@@ -267,6 +278,10 @@ class QrApp:
         self.build_widgets()
         apply_window_from_config(self.root)
         self.set_status("在左侧输入文字，二维码将自动生成", False)
+        if self.auto_clip_var.get():
+            # ini 记住为勾选：开机先读一次当前剪贴板，再持续轮询。
+            self.load_clipboard_if_changed()
+            self.start_clip_poll()
 
     def build_widgets(self):
         # 左固定宽参数面板，右弹性单张预览。
@@ -278,9 +293,15 @@ class QrApp:
         right = tk.Frame(self.root, padx=10, pady=10)
         right.grid(row=0, column=1, sticky="nsew")
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(1, weight=1)
+        # 预览图在第 2 行（0=标题、1=纠错等级），只有它吃多余高度。
+        right.rowconfigure(2, weight=1)
 
         tk.Label(left, text="输入文字(自动生成)").pack(anchor="w")
+        # 勾选后持续监听剪贴板：内容一变就整段载入输入框并立即出码。
+        self.auto_clip_check = tk.Checkbutton(
+            left, text="自动读取剪贴板", variable=self.auto_clip_var,
+            command=self.on_auto_clip_toggle)
+        self.auto_clip_check.pack(anchor="w")
         text_frame = tk.Frame(left)
         text_frame.pack(fill="both", expand=True)
         self.text_widget = tk.Text(text_frame, height=14, wrap="word")
@@ -309,14 +330,6 @@ class QrApp:
 
         param = tk.LabelFrame(left, text="参数", padx=8, pady=8)
         param.pack(fill="x", pady=(8, 0))
-        tk.Label(param, text="纠错等级(L<M<Q<H)").pack(anchor="w")
-        level_row = tk.Frame(param)
-        level_row.pack(fill="x")
-        for pos, level in enumerate(("L", "M", "Q", "H")):
-            tk.Radiobutton(
-                level_row, text=level, value=level, variable=self.error_var,
-                command=self.schedule_auto_generate,
-            ).grid(row=pos // 2, column=pos % 2, sticky="w")
         row = tk.Frame(param)
         row.pack(fill="x", pady=(8, 0))
         tk.Label(row, text="分辨率").pack(side="left")
@@ -353,10 +366,19 @@ class QrApp:
         tk.Label(right, text="二维码预览").grid(row=0, column=0, sticky="w")
         self.frame_label = tk.Label(right, text="", anchor="w")
         self.frame_label.grid(row=0, column=0, sticky="e")
+        # 纠错等级从左侧参数区移到二维码上方这一行，左栏腾出位置给剪贴板选项。
+        level_row = tk.Frame(right)
+        level_row.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        tk.Label(level_row, text="纠错等级(L<M<Q<H>)").pack(side="left")
+        for level in ("L", "M", "Q", "H"):
+            tk.Radiobutton(
+                level_row, text=level, value=level, variable=self.error_var,
+                command=self.schedule_auto_generate,
+            ).pack(side="left", padx=(8, 0))
         self.preview_label = tk.Label(right, bg="white", relief="groove")
-        self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+        self.preview_label.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
         self.status_label = tk.Label(right, text="", anchor="w", justify="left")
-        self.status_label.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self.status_label.grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
     def set_status(self, text, is_error):
         self.status_label.configure(text=text, fg=("red" if is_error else "black"))
@@ -446,6 +468,70 @@ class QrApp:
             except Exception:
                 continue
         return None
+
+    def on_auto_clip_toggle(self):
+        # 勾选：立即读一次当前剪贴板并开始轮询；取消：只停轮询，保留框内内容。
+        # 开关状态写回 ini，下次启动沿用。
+        self.persist_params_to_ini()
+        if self.auto_clip_var.get():
+            self.load_clipboard_if_changed()
+            self.start_clip_poll()
+        else:
+            self.stop_clip_poll()
+
+    def start_clip_poll(self):
+        # 幂等启动：重复勾选/启动调用不会叠加定时器。
+        self.stop_clip_poll()
+        self.clip_poll_id = self.root.after(CLIP_POLL_MS, self.poll_clipboard)
+
+    def stop_clip_poll(self):
+        if self.clip_poll_id is not None:
+            try:
+                self.root.after_cancel(self.clip_poll_id)
+            except Exception:
+                pass
+            self.clip_poll_id = None
+
+    def poll_clipboard(self):
+        # 每 CLIP_POLL_MS 查一次剪贴板；出异常也要排下一次，否则监听会静默断掉。
+        self.clip_poll_id = None
+        if not self.auto_clip_var.get():
+            return
+        try:
+            self.load_clipboard_if_changed()
+        except Exception as exc:
+            write_log("debug", "剪贴板轮询异常: " + str(exc))
+        try:
+            self.clip_poll_id = self.root.after(CLIP_POLL_MS, self.poll_clipboard)
+        except tk.TclError:
+            self.clip_poll_id = None
+
+    def load_clipboard_if_changed(self):
+        # 剪贴板文本有变化就整段替换输入框并立即出码（勾选后按需求无条件覆盖）。
+        # 空白内容跳过：避免剪贴板里一个换行/空格就把二维码清掉。
+        # 与框内内容一致时不动，避免每次轮询都重复生成。
+        # 返回 True=改了输入框。
+        data = self.read_clipboard_text(self.text_widget)
+        if data is None or data.strip() == "":
+            return False
+        self.last_clip_text = data
+        if data == self.text_widget.get("1.0", "end-1c"):
+            return False
+        self.text_widget.delete("1.0", "end")
+        self.text_widget.insert("1.0", data)
+        self.cancel_pending_generate()
+        self.do_generate()
+        write_log("debug", "已从剪贴板载入 " + str(len(data)) + " 字符")
+        return True
+
+    def cancel_pending_generate(self):
+        # 撤销未到期的 2 秒防抖，避免载入后又被旧防抖任务重复生成一遍。
+        if self.debounce_id is not None:
+            try:
+                self.root.after_cancel(self.debounce_id)
+            except Exception:
+                pass
+            self.debounce_id = None
 
     def forward_clipboard(self, event, virtual):
         # Ctrl+C/X 转调输入框原生 <<Copy>>/<<Cut>>，吃掉默认键行为。
@@ -571,7 +657,8 @@ class QrApp:
         self.restart_carousel()
 
     def persist_params_to_ini(self):
-        # 分辨率、轮播间隔与预览尺寸是 ini 已有键，变了就回写；纠错档无 ini 键，保持会话级。
+        # 分辨率、轮播间隔、预览尺寸与剪贴板开关是 ini 已有键，变了就回写；
+        # 纠错档无 ini 键，保持会话级。
         # 目录只读等异常静默跳过，不影响生成主流程。
         try:
             _ini_upsert(find_config_path(), "carousel", {
@@ -588,6 +675,12 @@ class QrApp:
         try:
             _ini_upsert(find_config_path(), "preview", {
                 "box": str(self.get_preview_box()),
+            }, overwrite=True)
+        except Exception:
+            pass
+        try:
+            _ini_upsert(find_config_path(), "clipboard", {
+                "auto": "1" if self.auto_clip_var.get() else "0",
             }, overwrite=True)
         except Exception:
             pass
@@ -644,8 +737,9 @@ class QrApp:
         messagebox.showinfo("保存成功", "\n".join(saved))
 
     def on_close(self):
-        # 关闭：停掉定时器，把窗口位置尺寸写回 ini，再退出。
+        # 关闭：停掉定时器与剪贴板轮询，把窗口位置尺寸写回 ini，再退出。
         self.stop_carousel()
+        self.stop_clip_poll()
         for timer_id in (self.debounce_id, self.interval_debounce_id):
             if timer_id is not None:
                 try:
@@ -657,12 +751,7 @@ class QrApp:
 
     def on_clear(self):
         self.stop_carousel()
-        if self.debounce_id is not None:
-            try:
-                self.root.after_cancel(self.debounce_id)
-            except Exception:
-                pass
-            self.debounce_id = None
+        self.cancel_pending_generate()
         self.text_widget.delete("1.0", "end")
         self.do_generate()
 
