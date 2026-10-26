@@ -135,7 +135,8 @@ class MainActivity : AppCompatActivity() {
         val cur = decoder
         if (cur == null || cur.sessionId != frame.sessionId ||
             cur.k != frame.k || cur.blockLen != frame.blockLen ||
-            cur.totalLen != frame.totalLen || cur.compressed != frame.compressed
+            cur.totalLen != frame.totalLen || cur.payloadFnv != frame.payloadFnv ||
+            cur.compressed != frame.compressed
         ) {
             decoder = FountainDecoder(
                 frame.k, frame.blockLen, frame.sessionId, frame.totalLen, frame.payloadFnv,

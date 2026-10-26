@@ -1,13 +1,24 @@
 #!/usr/bin/env python3.7
 # -*- coding: utf-8 -*-
-"""GUI headless 端到端：单码静止 + 喷泉轮播 + 保存渲染。"""
+"""GUI headless 端到端：单码静止 + 喷泉轮播 + 保存渲染 + 输入/剪贴板事件。"""
 import os
 import sys
 import tkinter as tk
+import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import qr_gui
+
+# 用独立目录当程序目录：测试读写的是自己的一份 ini，不碰用户真实的 qr_config.ini。
+qr_gui.APP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out_e2e")
+if not os.path.isdir(qr_gui.APP_DIR):
+    os.makedirs(qr_gui.APP_DIR)
+qr_gui.DEBUG = False
+qr_gui.APP_INTERVAL_MS = 100
+qr_gui.APP_BOX_SIZE = 10
+qr_gui.APP_PREVIEW_BOX = 4
+qr_gui.APP_AUTO_CLIP = False
 
 FAILS = []
 
@@ -87,6 +98,9 @@ app.on_auto_clip_toggle()
 root.update()
 check("勾选后自动载入剪贴板", app.text_widget.get("1.0", "end-1c") == "剪贴板自动载入测试")
 check("载入后已出码", app.stream is not None and app.preview_label.image is not None)
+check("勾选后已开始轮询", app.clip_poll_id is not None)
+# 停掉真实定时器，后面手动驱动，避免真实剪贴板内容定时覆盖测试文本。
+app.stop_clip_poll()
 
 root.clipboard_clear()
 root.clipboard_append("第二轮剪贴板内容")
@@ -104,6 +118,30 @@ check("空白剪贴板不清空已出码内容", app.text_widget.get("1.0", "end
 app.auto_clip_var.set(False)
 app.on_auto_clip_toggle()
 check("取消勾选后停止轮询", app.clip_poll_id is None)
+
+# 输入事件：内容变化才排防抖；粘贴同样生效；不再用 KeyRelease 触发
+app.text_widget.delete("1.0", "end")
+app.cancel_pending_generate()
+root.update()
+app.text_widget.insert("1.0", "事件测试")
+root.update()
+check("内容变化已排防抖", app.debounce_id is not None)
+app.cancel_pending_generate()
+app.do_generate()
+root.update()
+check("生成后防抖已清空", app.debounce_id is None)
+check("不再用 KeyRelease 触发生成", app.text_widget.bind("<KeyRelease>") == "")
+
+root.clipboard_clear()
+root.clipboard_append("粘贴事件测试")
+root.update()
+paste_event = types.SimpleNamespace(widget=app.text_widget)
+app.select_all_content()
+app.paste_text(paste_event)
+root.update()
+check("全选后粘贴替换为剪贴板内容", app.text_widget.get("1.0", "end-1c") == "粘贴事件测试")
+check("粘贴后已排防抖", app.debounce_id is not None)
+app.cancel_pending_generate()
 
 root.destroy()
 if FAILS:

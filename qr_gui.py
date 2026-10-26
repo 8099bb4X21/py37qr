@@ -43,6 +43,14 @@ WIN_MIN_W = 820
 WIN_MIN_H = 600
 
 
+def utf8_len(text):
+    # 界面统计用的 UTF-8 字节数；极端字符编码失败时退回字符数，不影响主流程。
+    try:
+        return len(text.encode("utf-8"))
+    except Exception:
+        return len(text)
+
+
 def get_app_dir():
     # 程序所在目录，编译前后统一读 ini/log。
     if getattr(sys, "frozen", False):
@@ -54,7 +62,7 @@ APP_DIR = get_app_dir()
 
 
 def find_config_path():
-    # exe 同目录 ini 优先，包内默认兜底。
+    # 读配置：exe 同目录 ini 优先，包内默认兜底。
     side = os.path.join(APP_DIR, CONFIG_FILE)
     if os.path.isfile(side):
         return side
@@ -63,6 +71,22 @@ def find_config_path():
         if os.path.isfile(inner):
             return inner
     return side
+
+
+def config_write_path():
+    # 写配置一律落程序目录：frozen 下 _MEIPASS 是临时解包目录，写进去重启即丢。
+    # 目录只读时由调用方静默忽略，不影响运行。
+    return os.path.join(APP_DIR, CONFIG_FILE)
+
+
+def ini_get(parser, section, option, fallback=""):
+    # 节名、键名都按不区分大小写读取：手写 [General]/[Window] 也能生效，
+    # 与 _ini_upsert 的写法保持一致（configparser 本身只对键名不区分大小写）。
+    want = str(section).strip().lower()
+    for name in parser.sections():
+        if name.strip().lower() == want:
+            return parser.get(name, option, fallback=fallback)
+    return fallback
 
 
 def load_app_config():
@@ -74,28 +98,28 @@ def load_app_config():
     preview_box = DEFAULT_PREVIEW_BOX
     auto_clip = False
     try:
-        parser = configparser.ConfigParser()
-        parser.read(find_config_path(), encoding="utf-8")
+        parser = configparser.ConfigParser(strict=False)
+        parser.read(find_config_path(), encoding="utf-8-sig")
     except Exception:
         return debug, interval_ms, box_size, preview_box, auto_clip
     try:
-        debug = parser.get("general", "debug", fallback="0").strip() == "1"
+        debug = ini_get(parser, "general", "debug", "0").strip() == "1"
     except Exception:
         pass
     try:
-        interval_ms = int(parser.get("carousel", "interval_ms", fallback="100"))
+        interval_ms = int(ini_get(parser, "carousel", "interval_ms", "100"))
     except Exception:
         pass
     try:
-        box_size = int(parser.get("qr", "box_size", fallback="10"))
+        box_size = int(ini_get(parser, "qr", "box_size", "10"))
     except Exception:
         pass
     try:
-        preview_box = int(parser.get("preview", "box", fallback="4"))
+        preview_box = int(ini_get(parser, "preview", "box", "4"))
     except Exception:
         pass
     try:
-        auto_clip = parser.get("clipboard", "auto", fallback="0").strip() == "1"
+        auto_clip = ini_get(parser, "clipboard", "auto", "0").strip() == "1"
     except Exception:
         pass
     if interval_ms < 50 or interval_ms > 2000:
@@ -114,20 +138,36 @@ def _ini_upsert(path, section, items, overwrite=False):
     # 文本级增量更新 ini：只补/改指定节的键，原样保留注释、空行与其他内容。
     # configparser 整文件重写会吃掉注释，所以这里手写追加逻辑。
     # overwrite=False 时已存在的键绝不覆盖（只补缺项）；True 则更新旧值（存窗口用）。
+    # 缺键补在目标节最后一行之后：补到文件末尾会被解析进最后一节，配置等于没写。
     # 返回 True=文件被改动过。
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            lines = handle.read().splitlines()
-    except Exception:
+    # 读取用 utf-8-sig 兼容带 BOM 的 ini；文件在却读不了时宁可不写，
+    # 绝不用空内容回写把用户配置清掉（编码/权限问题只影响本次增量更新）。
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8-sig") as handle:
+                lines = handle.read().splitlines()
+        except Exception:
+            return False
+    else:
         lines = []
     pending = dict(items)
     in_target = False
     section_seen = False
     changed = False
     out = []
+
+    def flush_pending():
+        # 把该节还没找到的键补在节内末尾。
+        for want_key, value in pending.items():
+            out.append(want_key + " = " + str(value))
+        pending.clear()
+
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
+            if in_target and pending:
+                flush_pending()
+                changed = True
             in_target = stripped[1:-1].strip().lower() == section.lower()
             if in_target:
                 section_seen = True
@@ -150,12 +190,14 @@ def _ini_upsert(path, section, items, overwrite=False):
                 # 值相同或只补缺项：保留原行，绝不覆盖用户内容。
                 del pending[hit]
         out.append(line)
+    if in_target and pending:
+        flush_pending()
+        changed = True
     if not section_seen:
+        # 整节都不存在：追加到文件末尾，紧跟自己的键。
         out.append("[" + section + "]")
         changed = True
-    for want_key, value in pending.items():
-        out.append(want_key + " = " + str(value))
-        changed = True
+        flush_pending()
     if not changed:
         return False
     try:
@@ -169,7 +211,8 @@ def _ini_upsert(path, section, items, overwrite=False):
 def ensure_config_defaults():
     # ini 缺项自动回写（只补 general/carousel/qr/preview/clipboard；window 关闭时才有真实值）。
     # 返回 True=写过文件。目录只读等异常静默跳过，保证任何环境可启动。
-    path = find_config_path()
+    # 只在 main() 里调：导入模块不落地文件，测试/复用不会改动用户配置。
+    path = config_write_path()
     changed = False
     changed = _ini_upsert(path, "general", {"debug": "0"}) or changed
     changed = _ini_upsert(path, "carousel", {"interval_ms": "100"}) or changed
@@ -177,9 +220,6 @@ def ensure_config_defaults():
     changed = _ini_upsert(path, "preview", {"box": "4"}) or changed
     changed = _ini_upsert(path, "clipboard", {"auto": "0"}) or changed
     return changed
-
-
-ensure_config_defaults()
 
 
 def center_window(root):
@@ -197,12 +237,12 @@ def apply_window_from_config(root):
     # 参考 docx 批量替换的 _apply_saved_window_size。
     # 返回 True=用了存档。
     try:
-        parser = configparser.ConfigParser()
-        parser.read(find_config_path(), encoding="utf-8")
-        x = int(parser.get("window", "x"))
-        y = int(parser.get("window", "y"))
-        width = int(parser.get("window", "width"))
-        height = int(parser.get("window", "height"))
+        parser = configparser.ConfigParser(strict=False)
+        parser.read(find_config_path(), encoding="utf-8-sig")
+        x = int(ini_get(parser, "window", "x"))
+        y = int(ini_get(parser, "window", "y"))
+        width = int(ini_get(parser, "window", "width"))
+        height = int(ini_get(parser, "window", "height"))
     except Exception:
         center_window(root)
         return False
@@ -227,7 +267,7 @@ def save_window_to_config(root):
     except Exception:
         return False
     try:
-        return _ini_upsert(find_config_path(), "window", {
+        return _ini_upsert(config_write_path(), "window", {
             "x": str(x),
             "y": str(y),
             "width": str(width),
@@ -267,9 +307,10 @@ class QrApp:
         self.carousel_pos = 0
         # 生成成功后置 True：点击输入框时全选旧文本，方便直接粘贴覆盖。
         self.auto_select_pending = False
-        # 剪贴板自动读取：轮询定时器 id 与上次读到的文本（用于判断是否变化）。
+        # 上一次真正生成用的原文：内容没变就不重复排防抖（避免轮播被打回第一帧）。
+        self.last_generated_text = None
+        # 剪贴板自动读取：轮询定时器 id。
         self.clip_poll_id = None
-        self.last_clip_text = None
         self.auto_clip_var = tk.BooleanVar(value=APP_AUTO_CLIP)
         self.error_var = tk.StringVar(value="M")
         self.box_var = tk.IntVar(value=APP_BOX_SIZE)
@@ -309,7 +350,11 @@ class QrApp:
         self.text_widget.configure(yscrollcommand=scroll.set)
         self.text_widget.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
-        self.text_widget.bind("<KeyRelease>", self.on_text_change)
+        # 内容变化走 <<Modified>>（覆盖键入、Ctrl+V、中键粘贴与程序写入）。
+        # 不用 <KeyRelease>：方向键/Ctrl 等不产生修改，旧绑定会在 2 秒后重新生成，
+        # 把正在跑的轮播打回第一帧；中键粘贴又没有按键事件，反而漏生成。
+        self.text_widget.bind("<<Modified>>", self.on_text_modified)
+        self.text_widget.edit_modified(False)
         # UOS/Linux 下 Tk 输入框默认 Ctrl+A=跳行首（非全选），
         # 且 Ctrl+C/X/V 无 Win 习惯行为，这里显式补上并吃掉默认键行为。
         self.text_widget.bind("<Control-a>", self.select_all_text)
@@ -333,23 +378,26 @@ class QrApp:
         row = tk.Frame(param)
         row.pack(fill="x", pady=(8, 0))
         tk.Label(row, text="分辨率").pack(side="left")
-        self.box_spin = tk.Spinbox(row, from_=4, to=20, width=3, textvariable=self.box_var,
-                   command=self.schedule_auto_generate)
+        self.box_spin = tk.Spinbox(
+            row, from_=4, to=20, width=3, textvariable=self.box_var,
+            command=self.schedule_auto_generate)
         self.box_spin.pack(side="left", padx=(2, 0))
         # Spinbox 的 command 只响应上下箭头，键盘打字走 KeyRelease，都进 2 秒防抖。
         self.box_spin.bind("<KeyRelease>", lambda event: self.schedule_auto_generate())
         row2 = tk.Frame(param)
         row2.pack(fill="x", pady=(8, 0))
         tk.Label(row2, text="轮播ms").pack(side="left")
-        self.interval_spin = tk.Spinbox(row2, from_=50, to=2000, width=5, textvariable=self.interval_var,
-                   command=self.schedule_interval_apply)
+        self.interval_spin = tk.Spinbox(
+            row2, from_=50, to=2000, width=5, textvariable=self.interval_var,
+            command=self.schedule_interval_apply)
         self.interval_spin.pack(side="left", padx=(2, 0))
         self.interval_spin.bind("<KeyRelease>", lambda event: self.schedule_interval_apply())
         row3 = tk.Frame(param)
         row3.pack(fill="x", pady=(8, 0))
         tk.Label(row3, text="预览尺寸").pack(side="left")
-        self.preview_spin = tk.Spinbox(row3, from_=2, to=12, width=3, textvariable=self.preview_var,
-                   command=self.schedule_auto_generate)
+        self.preview_spin = tk.Spinbox(
+            row3, from_=2, to=12, width=3, textvariable=self.preview_var,
+            command=self.schedule_auto_generate)
         self.preview_spin.pack(side="left", padx=(2, 0))
         # 预览尺寸只影响显示大小（2~12），改后 2 秒防抖重渲染，回写 ini 下次沿用。
         self.preview_spin.bind("<KeyRelease>", lambda event: self.schedule_auto_generate())
@@ -407,8 +455,15 @@ class QrApp:
             box = APP_PREVIEW_BOX
         return max(2, min(box, 12))
 
-    def on_text_change(self, event):
+    def on_text_modified(self, event):
+        # <<Modified>> 回调：内容真的变了才刷计数、排防抖。
+        # 置回 False 会再触发一次事件（1->0），这里靠 edit_modified() 判空挡住。
+        if not self.text_widget.edit_modified():
+            return
+        self.text_widget.edit_modified(False)
         self.update_counts_fast()
+        if self.text_widget.get("1.0", "end-1c") == self.last_generated_text:
+            return
         self.schedule_auto_generate()
 
     def select_all_text(self, event):
@@ -463,8 +518,6 @@ class QrApp:
         for kwargs in ({}, {"type": "UTF8_STRING"}):
             try:
                 return widget.clipboard_get(**kwargs)
-            except tk.TclError:
-                continue
             except Exception:
                 continue
         return None
@@ -485,12 +538,7 @@ class QrApp:
         self.clip_poll_id = self.root.after(CLIP_POLL_MS, self.poll_clipboard)
 
     def stop_clip_poll(self):
-        if self.clip_poll_id is not None:
-            try:
-                self.root.after_cancel(self.clip_poll_id)
-            except Exception:
-                pass
-            self.clip_poll_id = None
+        self.cancel_timer("clip_poll_id")
 
     def poll_clipboard(self):
         # 每 CLIP_POLL_MS 查一次剪贴板；出异常也要排下一次，否则监听会静默断掉。
@@ -514,7 +562,6 @@ class QrApp:
         data = self.read_clipboard_text(self.text_widget)
         if data is None or data.strip() == "":
             return False
-        self.last_clip_text = data
         if data == self.text_widget.get("1.0", "end-1c"):
             return False
         self.text_widget.delete("1.0", "end")
@@ -524,14 +571,20 @@ class QrApp:
         write_log("debug", "已从剪贴板载入 " + str(len(data)) + " 字符")
         return True
 
+    def cancel_timer(self, attr_name):
+        # 撤销指定名字的 after 定时器并清空 id；未排过/已到期都安全，失败静默。
+        timer_id = getattr(self, attr_name)
+        if timer_id is None:
+            return
+        try:
+            self.root.after_cancel(timer_id)
+        except Exception:
+            pass
+        setattr(self, attr_name, None)
+
     def cancel_pending_generate(self):
-        # 撤销未到期的 2 秒防抖，避免载入后又被旧防抖任务重复生成一遍。
-        if self.debounce_id is not None:
-            try:
-                self.root.after_cancel(self.debounce_id)
-            except Exception:
-                pass
-            self.debounce_id = None
+        # 撤销未到期的 2 秒防抖，避免载入/手动生成后又被旧任务重复生成一遍。
+        self.cancel_timer("debounce_id")
 
     def forward_clipboard(self, event, virtual):
         # Ctrl+C/X 转调输入框原生 <<Copy>>/<<Cut>>，吃掉默认键行为。
@@ -542,36 +595,32 @@ class QrApp:
         return "break"
 
     def update_counts_fast(self):
-        # 每次按键立即刷新字符/字节数（纯计算不渲染不生成）；生成仍走 2 秒防抖。
+        # 内容一变立即刷新字符/字节数（纯计算不渲染不生成）；生成仍走 2 秒防抖。
         raw = self.text_widget.get("1.0", "end-1c")
-        try:
-            used = len(raw.encode("utf-8"))
-        except Exception:
-            used = len(raw)
-        self.count_label.configure(text="字符: " + str(len(raw)) + " / 字节: " + str(used))
+        self.count_label.configure(
+            text="字符: " + str(len(raw)) + " / 字节: " + str(utf8_len(raw)))
 
     def schedule_auto_generate(self):
-        if self.debounce_id is not None:
-            try:
-                self.root.after_cancel(self.debounce_id)
-            except Exception:
-                pass
+        self.cancel_timer("debounce_id")
         self.debounce_id = self.root.after(DEBOUNCE_MS, self.do_generate)
 
     def do_generate(self):
         # 单码静止 / 喷泉轮播的统一入口，UI 线程同步生成(单帧渲染 ~0.05s)。
-        self.debounce_id = None
+        # 手动点按钮时可能还有未到期防抖：先撤掉，否则 2 秒后又生成一遍、轮播被打回第一帧。
+        self.cancel_pending_generate()
         self.stop_carousel()
-        # 参数回写 ini：之前只读不存，轮播间隔/分辨率改后重启丢失，此处补上。
+        # 参数回写 ini：轮播间隔/分辨率改后重启不丢。
         # _ini_upsert 值相同零写入，空输入也照存参数。
         self.persist_params_to_ini()
         raw = self.text_widget.get("1.0", "end-1c")
+        # 先记下本次生成的内容：<<Modified>> 事件稍后派发时据此判断“没新改动就不重排”。
+        self.last_generated_text = raw
         if raw.strip() == "":
             self.stream = None
             self.auto_select_pending = False
             self.frame_label.configure(text="")
-            self.preview_label.configure(image="", text="")
-            self.count_label.configure(text="字符: 0")
+            self.clear_preview()
+            self.update_counts_fast()
             self.set_status("输入为空，已清空预览", False)
             return
         try:
@@ -580,6 +629,9 @@ class QrApp:
         except Exception as exc:
             self.stream = None
             self.auto_select_pending = False
+            # 失败时不能留着上一张码，否则手机还会扫到旧内容。
+            self.frame_label.configure(text="")
+            self.clear_preview()
             self.set_status("生成失败: " + str(exc), True)
             return
         self.refresh_info(raw)
@@ -610,11 +662,16 @@ class QrApp:
         modules = len(qr.matrix) + PREVIEW_BORDER * 2
         img = qr_converter.render_qr_image(
             qr, self.preview_box_for(modules), PREVIEW_BORDER)
-        thumb = img.copy()
-        thumb.thumbnail((PREVIEW_SIZE, PREVIEW_SIZE))
-        photo = ImageTk.PhotoImage(thumb)
+        # 渲染出来就是本次专用图（不进缓存），直接原地缩略，少一次整图拷贝。
+        img.thumbnail((PREVIEW_SIZE, PREVIEW_SIZE))
+        photo = ImageTk.PhotoImage(img)
         self.preview_label.configure(image=photo)
         self.preview_label.image = photo
+
+    def clear_preview(self):
+        # 清空预览图并断开 PhotoImage 引用，避免旧图继续占内存/被当成有效码。
+        self.preview_label.configure(image="", text="")
+        self.preview_label.image = None
 
     def preview_box_for(self, modules_total):
         # 预览用的模块像素数：不小于用户设置；比轮播帧小的码（典型是短文本单码）
@@ -655,20 +712,11 @@ class QrApp:
         self.schedule_carousel()
 
     def stop_carousel(self):
-        if self.carousel_id is not None:
-            try:
-                self.root.after_cancel(self.carousel_id)
-            except Exception:
-                pass
-            self.carousel_id = None
+        self.cancel_timer("carousel_id")
 
     def schedule_interval_apply(self):
         # 轮播间隔改动后 2 秒无操作再生效，避免边输边重启轮播。
-        if self.interval_debounce_id is not None:
-            try:
-                self.root.after_cancel(self.interval_debounce_id)
-            except Exception:
-                pass
+        self.cancel_timer("interval_debounce_id")
         self.interval_debounce_id = self.root.after(DEBOUNCE_MS, self.apply_interval)
 
     def apply_interval(self):
@@ -679,28 +727,28 @@ class QrApp:
 
     def persist_params_to_ini(self):
         # 分辨率、轮播间隔、预览尺寸与剪贴板开关是 ini 已有键，变了就回写；
-        # 纠错档无 ini 键，保持会话级。
-        # 目录只读等异常静默跳过，不影响生成主流程。
+        # 纠错档无 ini 键，保持会话级。目录只读等异常静默跳过，不影响生成主流程。
+        path = config_write_path()
         try:
-            _ini_upsert(find_config_path(), "carousel", {
+            _ini_upsert(path, "carousel", {
                 "interval_ms": str(self.get_interval()),
             }, overwrite=True)
         except Exception:
             pass
         try:
-            _ini_upsert(find_config_path(), "qr", {
+            _ini_upsert(path, "qr", {
                 "box_size": str(self.get_box()),
             }, overwrite=True)
         except Exception:
             pass
         try:
-            _ini_upsert(find_config_path(), "preview", {
+            _ini_upsert(path, "preview", {
                 "box": str(self.get_preview_box()),
             }, overwrite=True)
         except Exception:
             pass
         try:
-            _ini_upsert(find_config_path(), "clipboard", {
+            _ini_upsert(path, "clipboard", {
                 "auto": "1" if self.auto_clip_var.get() else "0",
             }, overwrite=True)
         except Exception:
@@ -713,10 +761,8 @@ class QrApp:
             self.schedule_carousel()
 
     def refresh_info(self, raw):
-        try:
-            used = len(raw.encode("utf-8"))
-        except Exception:
-            used = len(raw)
+        # 生成后刷新计数栏：单码/轮播/压缩信息跟着当前流变化。
+        used = utf8_len(raw)
         if self.stream is None:
             self.count_label.configure(text="字符: " + str(len(raw)))
         elif self.stream.single:
@@ -732,6 +778,7 @@ class QrApp:
     def on_save(self):
         # 单码存 1 张；喷泉存 k 张系统帧(seq 0..k-1)。
         # 系统帧按序拼 = 传输层载荷：未压缩时即原文，压缩时需还原后再 gunzip。
+        # 逐帧渲染落盘，不把 k 张图同时攒在内存（大 k 时每张都上兆，攒着必 OOM）。
         if self.stream is None:
             self.set_status("没有可保存的内容", True)
             return
@@ -740,16 +787,9 @@ class QrApp:
             filetypes=[("PNG 图片", "*.png")], initialfile="qrcode.png")
         if not target:
             return
-        box = self.get_box()
         try:
-            if self.stream.single:
-                images = [qr_converter.build_qr_image(
-                    self.stream.frame_text(0), box, FIXED_BORDER, self.stream.error_name)]
-            else:
-                images = [qr_converter.render_qr_image(
-                    self.stream.qr_code(i), box, FIXED_BORDER)
-                    for i in range(self.stream.k)]
-            saved = qr_converter.save_qr_images(images, target)
+            saved = qr_converter.save_qr_stream(
+                self.stream, self.get_box(), FIXED_BORDER, target)
         except Exception as exc:
             messagebox.showerror("保存失败", str(exc))
             self.set_status("保存失败: " + str(exc), True)
@@ -758,15 +798,10 @@ class QrApp:
         messagebox.showinfo("保存成功", "\n".join(saved))
 
     def on_close(self):
-        # 关闭：停掉定时器与剪贴板轮询，把窗口位置尺寸写回 ini，再退出。
-        self.stop_carousel()
-        self.stop_clip_poll()
-        for timer_id in (self.debounce_id, self.interval_debounce_id):
-            if timer_id is not None:
-                try:
-                    self.root.after_cancel(timer_id)
-                except Exception:
-                    pass
+        # 关闭：停掉所有定时器与剪贴板轮询，把窗口位置尺寸写回 ini，再退出。
+        for attr_name in ("carousel_id", "clip_poll_id", "debounce_id",
+                          "interval_debounce_id"):
+            self.cancel_timer(attr_name)
         save_window_to_config(self.root)
         self.root.destroy()
 
@@ -848,6 +883,8 @@ def log_startup_info():
 
 
 def main():
+    # 启动时把 ini 缺项补齐（只补不改）；放进 main 里，导入模块不写用户文件。
+    ensure_config_defaults()
     log_startup_info()
     # className 决定窗口 WM_CLASS，launcher 用 StartupWMClass=Qrtool 做任务栏归组。
     # 注意 Tk 会把类名归一化为首字母大写其余小写，实测 "QrTool" 会变成 "Qrtool"，

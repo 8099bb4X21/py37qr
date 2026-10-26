@@ -1,8 +1,11 @@
 #!/usr/bin/env python3.7
 # -*- coding: utf-8 -*-
 """fountain + qr_converter 单元验证。"""
+import base64
 import os
+import random
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,7 +24,6 @@ def roundtrip(payload, block_len, drop=0.3):
     enc = fountain.FountainEncoder(payload, block_len=block_len, session_id=12345)
     dec = fountain.FountainDecoder(
         enc.k, enc.block_len, enc.session_id, enc.total_len, enc.payload_fnv)
-    import random
     random.seed(7)
     for seq in range(fountain.cycle_length(enc.k) * 4):
         if random.random() < drop:
@@ -56,8 +58,7 @@ r = fountain.splitmix32(99)
 check("金标splitmix32", [r() for _ in range(3)] == [349753557, 2385026473, 2250837844])
 
 # 2c. 恶意/畸形帧必须拒绝（对应 Kotlin 端防崩溃）。
-import base64 as _b64
-_good_block = _b64.b64encode(b"x" * 200).decode("ascii")
+_good_block = base64.b64encode(b"x" * 200).decode("ascii")
 
 
 def _frame(seq, k, block_len, total_len):
@@ -106,10 +107,9 @@ check("原文帧解析回非压缩", p_raw is not None and p_raw["compressed"] i
 # 压缩端到端：丢 30% 仍还原再解压
 dec2 = fountain.FountainDecoder(
     enc_gz.k, enc_gz.block_len, enc_gz.session_id, enc_gz.total_len, enc_gz.payload_fnv)
-import random as _rd
-_rd.seed(11)
+random.seed(11)
 for seq in range(fountain.cycle_length(enc_gz.k) * 4):
-    if _rd.random() < 0.3:
+    if random.random() < 0.3:
         continue
     _pp = fountain.parse_frame_text(enc_gz.frame_text(seq))
     dec2.add_frame(_pp["seq"], _pp["block"])
@@ -138,5 +138,33 @@ _frame_stream = qr_converter.EncodedStream("轮播测试内容" * 400, error_nam
 check("预览参考边长=轮播帧边长", (
     qr_converter.fountain_frame_modules("M", 200, 4)
     == len(_frame_stream.qr_code(0).matrix) + 8))
+
+# 7. 超大文本守卫：超过单码理论上限直接走喷泉，不让 segno 白跑几秒
+_start = time.time()
+_huge = qr_converter.EncodedStream("x" * 200000, error_name="M")
+_huge_cost = time.time() - _start
+check("超大文本直接走喷泉", not _huge.single)
+check("超大文本判定不卡", _huge_cost < 1.0)
+print("[INFO] 20 万字符判定耗时 %.3fs" % _huge_cost)
+
+# 8. 逐帧落盘：单码 1 张不带后缀，喷泉 k(>1) 张带 _N 后缀
+_out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out_check")
+_saved_single = qr_converter.save_qr_stream(
+    short, 4, 4, os.path.join(_out_dir, "save_single.png"))
+check("单码保存 1 张", (
+    len(_saved_single) == 1
+    and _saved_single[0].endswith("save_single.png")
+    and os.path.isfile(_saved_single[0])))
+random.seed(3)
+_noise = "".join(random.choice("0123456789abcdef") for _ in range(3000))
+_out_stream = qr_converter.EncodedStream(_noise, error_name="M", block_len=200)
+check("落盘用流确实多块", _out_stream.k > 1)
+_saved_frames = qr_converter.save_qr_stream(
+    _out_stream, 4, 4, os.path.join(_out_dir, "save_frames.png"))
+check("轮播保存 k 张带序号", (
+    len(_saved_frames) == _out_stream.k
+    and _saved_frames[0].endswith("save_frames_1.png")
+    and _saved_frames[-1].endswith("save_frames_" + str(_out_stream.k) + ".png")
+    and os.path.isfile(_saved_frames[-1])))
 
 print("[INFO] 全部验证通过")

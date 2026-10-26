@@ -12,6 +12,7 @@ QR 转换模块: 文字 -> 单码(短) 或 喷泉轮播流(长)。
     stream.compressed      # 喷泉载荷是否 gzip 过（单码恒 False）
     stream.frame_text(i)   # 第 i 帧文本(单码=原文, 喷泉=PYQRF1/PYQRF2 头帧)
     build_qr_image(...)    # 文本 -> PIL 图(调用方可按需逐帧渲染)
+    save_qr_stream(...)    # 整流出图落盘(单码 1 张, 喷泉 k 张, 逐帧写不攒内存)
 """
 
 import os
@@ -26,6 +27,11 @@ import fountain
 
 
 ERROR_LEVELS = ("L", "M", "Q", "H")
+
+# 单码字符数理论上限：QR 40-L 数字模式最多 7089 个字符，超过它任何模式都装不下。
+# segno 在超大文本上要白跑数秒（实测 20 万字符 1.7s / 100 万字符 8.4s），
+# 命中上限就直接走喷泉，别让界面卡住。
+SINGLE_MAX_CHARS = 7089
 
 # 轮播帧矩阵边长按(纠错等级,块长,静默区)缓存：界面每次预览都会查，避免重复编码。
 _FRAME_MODULES_CACHE = {}
@@ -101,18 +107,23 @@ class EncodedStream:
 
     def __init__(self, text, error_name="M", block_len=200):
         # 判定单码/轮播：纯文本能否塞进一个 QR，能则静止，否则喷泉切片。
+        if text is None or text == "":
+            raise ValueError("输入文字为空，无法生成二维码")
         self.error_name = get_error_correction(error_name)
         self.text = text
         self.compressed = False
-        self.raw_len = len(text.encode("utf-8"))
+        payload = text.encode("utf-8")
+        self.raw_len = len(payload)
         self.payload_len = self.raw_len
         self._qr_cache = {}
-        payload = text.encode("utf-8")
-        try:
-            try_encode(text, self.error_name)
-            self.single = True
-        except ValueError:
-            self.single = False
+        # 字符数超过单码理论上限时不必试编码：直接按喷泉走。
+        self.single = False
+        if len(text) <= SINGLE_MAX_CHARS:
+            try:
+                try_encode(text, self.error_name)
+                self.single = True
+            except ValueError:
+                self.single = False
         if self.single:
             self.encoder = None
             self.k = 1
@@ -147,30 +158,34 @@ class EncodedStream:
         return qr
 
 
-def save_qr_images(images, base_path):
-    # 单张直接存，多张加 _N 后缀。返回已写文件路径列表。
-    if not images:
-        raise ValueError("images 为空，没有可保存的内容")
+def _png_target_paths(base_path, count):
+    # 校验保存路径并生成落盘文件名：单张不加后缀，多张加 _1.._count。
     root = str(base_path).strip()
     if root == "":
         raise ValueError("保存路径为空")
-    stem = root
-    if stem.lower().endswith(".png"):
-        stem = stem[:-4]
+    stem = root[:-4] if root.lower().endswith(".png") else root
     parent = os.path.dirname(os.path.abspath(stem))
     if parent and not os.path.isdir(parent):
         os.makedirs(parent)
-    saved = []
-    if len(images) == 1:
-        out = stem + ".png"
-        images[0].save(out, format="PNG")
-        saved.append(out)
-    else:
-        for idx, img in enumerate(images, start=1):
-            out = stem + "_" + str(idx) + ".png"
-            img.save(out, format="PNG")
-            saved.append(out)
-    return saved
+    if count == 1:
+        return [stem + ".png"]
+    paths = []
+    for idx in range(1, count + 1):
+        paths.append(stem + "_" + str(idx) + ".png")
+    return paths
+
+
+def save_qr_stream(stream, box_size, border, base_path):
+    # 把整个流逐帧渲染落盘：单码 1 张，喷泉 k 张系统帧(seq 0..k-1)。
+    # 逐帧写盘而不是先攒一个 images 列表：大 k 时 k 张图同时留在内存会直接 OOM。
+    # 返回已写文件路径列表。
+    count = 1 if stream.single else stream.k
+    paths = _png_target_paths(base_path, count)
+    for seq, out in enumerate(paths):
+        img = render_qr_image(stream.qr_code(seq), box_size, border)
+        img.save(out, format="PNG")
+        del img
+    return paths
 
 
 def main():
@@ -196,7 +211,11 @@ def main():
     for i in range(fountain.cycle_length(long_stream.k)):
         parsed = fountain.parse_frame_text(long_stream.frame_text(i))
         dec.add_frame(parsed["seq"], parsed["block"])
-    assert dec.assemble() == long_text.encode("utf-8")
+    restored = dec.assemble()
+    if long_stream.compressed:
+        # 长文择优压缩后，assemble 拿到的是 gzip 载荷，要解压才等于原文。
+        restored = fountain.gzip_decompress(restored)
+    assert restored == long_text.encode("utf-8")
     print("[PASS] 喷泉轮播帧可完整还原原文")
     print("[INFO] 自测完毕")
 

@@ -91,6 +91,7 @@ except tk.TclError:
     pass
 stub.paste_text(stub.event)
 check("空剪贴板不破坏原内容", text_of(stub) == "保留内容")
+check("空剪贴板保留选区", stub.text_widget.tag_ranges("sel") != ())
 
 # 5. 生成后首次点击：空闲后自动全选，且标志只消费一次
 stub.text_widget.tag_remove("sel", "1.0", "end")
