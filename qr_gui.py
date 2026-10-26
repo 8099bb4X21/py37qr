@@ -258,6 +258,8 @@ class QrApp:
         self.interval_debounce_id = None
         self.stream = None
         self.carousel_pos = 0
+        # 生成成功后置 True：点击输入框时全选旧文本，方便直接粘贴覆盖。
+        self.auto_select_pending = False
         self.error_var = tk.StringVar(value="M")
         self.box_var = tk.IntVar(value=APP_BOX_SIZE)
         self.interval_var = tk.IntVar(value=APP_INTERVAL_MS)
@@ -295,8 +297,12 @@ class QrApp:
         self.text_widget.bind("<Control-C>", lambda event: self.forward_clipboard(event, "<<Copy>>"))
         self.text_widget.bind("<Control-x>", lambda event: self.forward_clipboard(event, "<<Cut>>"))
         self.text_widget.bind("<Control-X>", lambda event: self.forward_clipboard(event, "<<Cut>>"))
-        self.text_widget.bind("<Control-v>", lambda event: self.forward_clipboard(event, "<<Paste>>"))
-        self.text_widget.bind("<Control-V>", lambda event: self.forward_clipboard(event, "<<Paste>>"))
+        # 粘贴不走原生 <<Paste>>：Debian10 的 Tk 8.6.9 只往插入点插内容，
+        # 不删已选中文本，会出现新旧内容并存，故自行实现覆盖式粘贴。
+        self.text_widget.bind("<Control-v>", self.paste_text)
+        self.text_widget.bind("<Control-V>", self.paste_text)
+        # 生成二维码后第一次点击输入框自动全选，直接衔接“粘贴覆盖”。
+        self.text_widget.bind("<Button-1>", self.on_text_click)
 
         self.count_label = tk.Label(left, text="字符: 0", anchor="w", justify="left")
         self.count_label.pack(anchor="w", pady=(6, 0))
@@ -385,13 +391,64 @@ class QrApp:
 
     def select_all_text(self, event):
         # Ctrl+A 全选：覆盖 Linux 默认的跳行首行为。
-        event.widget.tag_add("sel", "1.0", "end-1c")
-        event.widget.mark_set("insert", "end-1c")
-        event.widget.see("insert")
+        self.select_all_content()
         return "break"
 
+    def select_all_content(self):
+        # 全选并把插入点放到末尾：全选后直接打字或粘贴都是覆盖式输入。
+        self.text_widget.tag_add("sel", "1.0", "end-1c")
+        self.text_widget.mark_set("insert", "end-1c")
+        self.text_widget.see("insert")
+
+    def on_text_click(self, event):
+        # 生成二维码后第一次点击输入框：先让 Tk 摆好焦点和光标，再在空闲时全选。
+        # 只在首次点击生效，之后想点光标改错字不会被反复全选。
+        # 返回 None 表示不拦截默认点击行为。
+        if not self.auto_select_pending:
+            return None
+        self.auto_select_pending = False
+        if self.text_widget.get("1.0", "end-1c") == "":
+            return None
+        self.root.after_idle(self.select_all_after_click)
+        return None
+
+    def select_all_after_click(self):
+        # after_idle 回调：窗口已销毁等异常静默忽略，不影响退出流程。
+        try:
+            self.select_all_content()
+        except tk.TclError:
+            pass
+
+    def paste_text(self, event):
+        # 自行实现粘贴：有选区先删选区，再从选区起点插入，与 Windows 行为一致。
+        # 剪贴板没有文本时保持原内容不变，避免误删已选中内容。
+        widget = event.widget
+        data = self.read_clipboard_text(widget)
+        if data is None:
+            return "break"
+        ranges = widget.tag_ranges("sel")
+        if ranges:
+            start_index = widget.index(ranges[0])
+            widget.delete(ranges[0], ranges[1])
+            widget.mark_set("insert", start_index)
+        widget.insert("insert", data)
+        widget.see("insert")
+        return "break"
+
+    def read_clipboard_text(self, widget):
+        # 读剪贴板文本：先按 Tk 默认类型（与原生粘贴一致），失败再试 UTF8_STRING
+        # （UOS 的 Wayland 桥接对 STRING 转换不全）。都不成返回 None。
+        for kwargs in ({}, {"type": "UTF8_STRING"}):
+            try:
+                return widget.clipboard_get(**kwargs)
+            except tk.TclError:
+                continue
+            except Exception:
+                continue
+        return None
+
     def forward_clipboard(self, event, virtual):
-        # Ctrl+C/X/V 转调输入框原生 <<Copy>>/<<Cut>>/<<Paste>>，吃掉默认键行为。
+        # Ctrl+C/X 转调输入框原生 <<Copy>>/<<Cut>>，吃掉默认键行为。
         try:
             event.widget.event_generate(virtual)
         except Exception:
@@ -425,6 +482,7 @@ class QrApp:
         raw = self.text_widget.get("1.0", "end-1c")
         if raw.strip() == "":
             self.stream = None
+            self.auto_select_pending = False
             self.frame_label.configure(text="")
             self.preview_label.configure(image="", text="")
             self.count_label.configure(text="字符: 0")
@@ -435,9 +493,12 @@ class QrApp:
                 raw, str(self.error_var.get()), block_len=DEFAULT_BLOCK_LEN)
         except Exception as exc:
             self.stream = None
+            self.auto_select_pending = False
             self.set_status("生成失败: " + str(exc), True)
             return
         self.refresh_info(raw)
+        # 生成成功后布置“下一次点击输入框全选”，配合覆盖式粘贴换内容。
+        self.auto_select_pending = True
         if self.stream.single:
             self.frame_label.configure(text="")
             self.show_frame(0)
